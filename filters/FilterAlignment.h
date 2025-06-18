@@ -1,0 +1,11 @@
+#ifndef GENOMICPIPELINE_FILTERALIGNMENT_H
+#define GENOMICPIPELINE_FILTERALIGNMENT_H
+
+
+class FilterAlignment {
+
+    static bool AddREFID();
+};
+
+
+#endif //GENOMICPIPELINE_FILTERALIGNMENT_H

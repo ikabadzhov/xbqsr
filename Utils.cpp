@@ -27,15 +27,9 @@ void init_options( po::options_description &description, bool &help ){
     description.add_options()( "help,h", po::bool_switch(&help), "Display help" )(
             "input", po::value<string>(), "arg")(
             "output", po::value<string>(), "arg")(
-            "mark-duplicates", po::bool_switch()->default_value(false))(
-            "metric-file", po::value<string>(), "file" )(
-            "optical-duplicates-pixel-distance", po::value<int32_t>(), "nr" )(
-            "remove-duplicates", po::bool_switch()->default_value(false), "" )(
-            "sorting-order", po::value<string>(), "[ keep | unknown | unsorted | queryname | coordinate ]" )(
             "bqsr", po::value<string>(), " recal-file" )(
                 "known-sites", po::value<string>(), " site-file" )(
-            "reference", po::value<string>(), "fasta-file" )(
-        	"contig-group-size", po::value<int32_t>(), "nr (sfm only)"
+            "reference", po::value<string>(), "fasta-file"
     );
 
 }

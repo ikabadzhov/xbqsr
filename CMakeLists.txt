@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 SET(CMAKE_C_COMPILER icx)
 SET(CMAKE_CXX_COMPILER icpx)
 
-project(syclgal)
+project(bqsr)
 
 SET(CMAKE_CXX_STANDARD 20)
 
@@ -22,7 +22,7 @@ find_package(Boost 1.63.0 COMPONENTS program_options REQUIRED)
 find_package(TBB)
 include_directories( ${Boost_INCLUDE_DIR})
 
-add_executable(syclgal main.cpp
+add_executable(bqsr main.cpp
 		sam_data_structures/sam_fields/Sequence.cpp
 		input_output/utils/StringScanner.cpp
 		sam_data_structures/SamHeader.cpp
@@ -142,6 +142,9 @@ add_executable(syclgal main.cpp
 		bqsr/apply_bqsr/ApplyBqsrFunctions.h
 		tileinfo/tileInfo.cpp
 		tileinfo/tileInfo.h
+		input_output/bam_io/BamUtilsIO.h
+		timer/Profiler.cpp
+		timer/Profiler.h
 )
 
-target_link_libraries(syclgal TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB)
+target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB)

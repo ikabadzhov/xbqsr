@@ -182,16 +182,14 @@ int main(int argc, char **argv) {
 
         t.reset();
 
-        std::unique_ptr<BaseRecalibrator> baseRecal = NewBaseRecalibrator(knownSites, referenceGenome);
-
-
-
         int maxCycle = 500;
         BaseRecalibratorTables baseRecalibratorTables(alignments.TAGS.RG.NumEntriesTable(), 94,
                                                       maxCycle);//TODO: Make the size as function of context size
 
+        std::unique_ptr<BaseRecalibrator> baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, alignments.GetHdr(), baseRecalibratorTables);
 
-        baseRecal->Recalibrate(device, alignments, maxCycle, baseRecalibratorTables);
+
+        baseRecal->Recalibrate(device, alignments, maxCycle);
         baseRecalibratorTables.FinalizeBQSRTables();
 
         Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t.elapsed()) + " sec");

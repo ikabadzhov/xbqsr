@@ -21,6 +21,7 @@
 #include "../sycl_parallel_library/sorting/mergesort.h"
 #include "../sycl_parallel_library/sorting/external_sort.h"
 #include "../logger/Logger.h"
+#include "../timer/Profiler.h"
 #include "apply_bqsr/ApplyBqsrFunctions.h"
 #include "apply_bqsr/ApplyBqsrKernelData.h"
 
@@ -337,25 +338,9 @@ void calculateSkipSlice(char* seq, SpanField& sequencePtrs, char* qual, SpanFiel
 // NewBaseRecalibrator returns a struct for the first step of base recalibration.
 std::unique_ptr<BaseRecalibrator> NewBaseRecalibrator(std::vector<std::string>& knownSites, MappedFasta& referenceFasta) {
 
-    std::unique_ptr<BaseRecalibrator> recal = std::make_unique<BaseRecalibrator>(referenceFasta);
+    //std::unique_ptr<BaseRecalibrator> recal = std::make_unique<BaseRecalibrator>(referenceFasta, knownSites);
 
-    for (std::string& knownSitesFile : knownSites){
-        std::unordered_map<std::string, std::vector<Interval>> knownSitesIntervals;
-        Interval::ImportIntervals(knownSitesFile, knownSitesIntervals);
-        for (auto& p : knownSitesIntervals) {
-            auto chrom = p.first;
-            auto ivals = p.second;
-            auto s1 = recal->knownIntervals[chrom].size();
-            auto s2 = ivals.size();
-            recal->knownIntervals[chrom].reserve(s1+s2);
-            std::move(ivals.begin(), ivals.end(), std::back_inserter(recal->knownIntervals[chrom]));
-        }
-    }
-    for (auto& [chrom, ivals] : recal->knownIntervals) {
-        Interval::ParallelSortByStart(ivals);
-        recal->knownIntervals[chrom] = Interval::ParallelFlatten(ivals);
-    }
-    return recal;
+    return {};
 }
 
 // NewBaseRecalibratorTables returns a struct for storing the result
@@ -395,22 +380,18 @@ std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
     }
 }
 
-std::vector<int64_t> observationsPerRead;
-
 // Recalibrate implements the first step of base recalibration.
-void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle, BaseRecalibratorTables& result) {
+void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle) {
     Timer timer;
     Timer timerAll;
+    auto& profiler = ProfilerBQSR::instance();
     timerAll.reset();
     Timer t;
-
-    sycl::queue q(device);
 
     t.reset();
 
     int32_t maxIdx = reads.GetAlnsNum();
     auto& hdr = reads.GetHdr();
-    observationsPerRead.resize(maxIdx, -1);
     reads.TMP.reads_group_covariate_.Resize(maxIdx);
 
     tbb::parallel_for(0, maxIdx, [&](size_t idx) {
@@ -442,81 +423,8 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     size_t max_thread = std::thread::hardware_concurrency();
     size_t work_sz = (reads.GetAlnsNum() + max_thread - 1) / max_thread;
 
-    size_t sz_local_intervals_ptr = hdr.getSequenceDictionary().getAll().size();
-
-    mem_t<SpanFieldLong> local_known_intervals_ptrs(sz_local_intervals_ptr, q, memory_space_shared);
-
-    size_t totSz = 0;
-    for (const auto& chrIntervals : this->knownIntervals) {
-        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
-            totSz += chrIntervals.second.size();
-            local_known_intervals_ptrs.data()[chrIdx] = SpanFieldLong(0, chrIntervals.second.size());
-        }
-    }
-
-    mem_t<Interval> local_known_intervals(totSz, q, memory_space_shared);
-
-    for (size_t idx = 1; idx < local_known_intervals_ptrs.size(); idx++) {
-        local_known_intervals_ptrs.data()[idx].start += local_known_intervals_ptrs.data()[idx-1].start + local_known_intervals_ptrs.data()[idx - 1].len;
-    }
-
-    for (const auto& chrIntervals : this->knownIntervals) {
-        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
-            assert(local_known_intervals_ptrs.data()[chrIdx].len == chrIntervals.second.size());
-            for (size_t intervIdx = 0; intervIdx < chrIntervals.second.size(); intervIdx++) {
-                local_known_intervals.data()[local_known_intervals_ptrs.data()[chrIdx].start + intervIdx] = chrIntervals.second[intervIdx];
-            }
-        }
-    }
-
-    mem_t<SpanFieldLong> fasta_ptrs(hdr.getSequenceDictionary().getAll().size(), q, memory_space_shared);
-
-    totSz = 0;
-    for (auto& references : this->fastaMap.getFullFasta()) {
-        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
-            totSz += references.second.size();
-            fasta_ptrs.data()[chrIdx] = SpanFieldLong(0, references.second.size());
-        }
-    }
-
-    mem_t<uint8_t> fasta(totSz, q, memory_space_shared);
-
-    for (size_t idx = 1; idx < fasta_ptrs.size(); idx++) {
-        fasta_ptrs.data()[idx].start += fasta_ptrs.data()[idx-1].start + fasta_ptrs.data()[idx - 1].len;
-    }
-
-    for (auto& references : this->fastaMap.getFullFasta()) {
-        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
-            assert(fasta_ptrs.data()[chrIdx].len == references.second.size());
-            for (size_t intervIdx = 0; intervIdx < references.second.size(); intervIdx++) {
-                fasta.data()[fasta_ptrs.data()[chrIdx].start + intervIdx] = references.second[intervIdx];
-            }
-        }
-    }
-
-    Logger::getLogger().log(LOG_INFO, "Time to flatten fasta and intervals: " + std::to_string(t.elapsed()));
-
     t.reset();
-    mem_t<bqsrEntry> tables_quality(result.QualityScores.size(), q, memory_space_t::memory_space_shared);
-    mem_t<bqsrEntry> tables_cycle(result.Cycles.size(), q, memory_space_t::memory_space_shared);
-    mem_t<bqsrEntry> tables_context(result.Contexts.size(), q, memory_space_t::memory_space_shared);
-    bqsrEntry defaultEntry;
-    defaultEntry.EmpiricalQuality = 0;
-    defaultEntry.Observations = -1;
-    defaultEntry.Mismatches = 0;
-
-    q.fill(tables_quality.data(), defaultEntry, result.QualityScores.size());
-    q.fill(tables_cycle.data(), defaultEntry, result.Cycles.size());
-    q.fill(tables_context.data(), defaultEntry, result.Contexts.size());
-    q.wait();
-    Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
-
-    t.reset();
-
+    profiler.start(StageId::Transform);
     std::vector<std::vector<std::vector<CigarOperation>>> local_clipped_cigar(max_thread, std::vector<std::vector<CigarOperation>>(work_sz));
     std::vector<std::vector<SpanField>> local_clipped_cigar_ptrs(max_thread);
 
@@ -557,7 +465,7 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     Logger::getLogger().log(LOG_INFO, "Time to clip sequences: " + std::to_string(t.elapsed()));
 
     t.reset();
-    totSz = 0;
+    size_t totSz = 0;
     for (const auto& cigars_thread : local_clipped_cigar) {
         for (const auto& cigar : cigars_thread) {
             totSz += cigar.size();
@@ -607,14 +515,13 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
         Logger::getLogger().log(LOG_INFO, "Time to update offsets: " + std::to_string(t.elapsed()));
 
         t.reset();
+        profiler.stop(StageId::Transform);
 
         // Update the SequencesInput instance to process only the current batch.
         SequencesInput in(local_known_intervals, local_known_intervals_ptrs,
                           fasta, fasta_ptrs,
-
                           tables_quality.data(), tables_cycle.data(), tables_context.data(),
-
-                          result.szQualScore, result.szCycleCov, result.szContextCov,
+                          recalibration_tables.szQualScore, recalibration_tables.szCycleCov, recalibration_tables.szContextCov,
                           clippedSequences.data() + flat_offset_sequences,    // correct flat offset
                           clippedSequencesPtrs.data() + offset,                 // pointer array remains sliced at batch start
                           clippedQualities.data() + flat_offset_qualities,      // adjust using pointer array
@@ -650,12 +557,108 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     }
 
     t.reset();
-    memcpy(result.QualityScores.table.data(), tables_quality.data(), sizeof(bqsrEntry)*result.QualityScores.size());
-    memcpy(result.Cycles.table.data(), tables_cycle.data(), sizeof(bqsrEntry)*result.Cycles.size());
-    memcpy(result.Contexts.table.data(), tables_context.data(), sizeof(bqsrEntry)*result.Contexts.size());
+    memcpy(recalibration_tables.QualityScores.table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.QualityScores.size());
+    memcpy(recalibration_tables.Cycles.table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.Cycles.size());
+    memcpy(recalibration_tables.Contexts.table.data(), tables_context.data(), sizeof(bqsrEntry)*recalibration_tables.Contexts.size());
     Logger::getLogger().log(LOG_INFO, "Time to store table back in the host: " + std::to_string(t.elapsed()));
 
     Logger::getLogger().log(LOG_INFO, "Total time recalibrate: " + std::to_string(timerAll.elapsed()) + "sec");
+    profiler.report();
+}
+
+BaseRecalibrator::BaseRecalibrator(MappedFasta &fastaMap, vector<std::string> &knownSites,
+                                   sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), fastaMap(fastaMap), q(device) {
+    Timer t;
+    t.reset();
+    for (std::string& knownSitesFile : knownSites){
+        std::unordered_map<std::string, std::vector<Interval>> knownSitesIntervals;
+        Interval::ImportIntervals(knownSitesFile, knownSitesIntervals);
+        for (auto& p : knownSitesIntervals) {
+            auto chrom = p.first;
+            auto ivals = p.second;
+            auto s1 = knownIntervals[chrom].size();
+            auto s2 = ivals.size();
+            knownIntervals[chrom].reserve(s1+s2);
+            std::move(ivals.begin(), ivals.end(), std::back_inserter(knownIntervals[chrom]));
+        }
+    }
+    for (auto& [chrom, ivals] : knownIntervals) {
+        Interval::ParallelSortByStart(ivals);
+        knownIntervals[chrom] = Interval::ParallelFlatten(ivals);
+    }
+
+    size_t sz_local_intervals_ptr = hdr.getSequenceDictionary().getAll().size();
+
+    local_known_intervals_ptrs = mem_t<SpanFieldLong>(sz_local_intervals_ptr, q, memory_space_shared);
+
+    size_t totSz = 0;
+    for (const auto& chrIntervals : this->knownIntervals) {
+        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
+            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
+            totSz += chrIntervals.second.size();
+            local_known_intervals_ptrs.data()[chrIdx] = SpanFieldLong(0, chrIntervals.second.size());
+        }
+    }
+
+    local_known_intervals = mem_t<Interval>(totSz, q, memory_space_shared);
+
+    for (size_t idx = 1; idx < local_known_intervals_ptrs.size(); idx++) {
+        local_known_intervals_ptrs.data()[idx].start += local_known_intervals_ptrs.data()[idx-1].start + local_known_intervals_ptrs.data()[idx - 1].len;
+    }
+
+    for (const auto& chrIntervals : knownIntervals) {
+        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
+            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
+            assert(local_known_intervals_ptrs.data()[chrIdx].len == chrIntervals.second.size());
+            for (size_t intervIdx = 0; intervIdx < chrIntervals.second.size(); intervIdx++) {
+                local_known_intervals.data()[local_known_intervals_ptrs.data()[chrIdx].start + intervIdx] = chrIntervals.second[intervIdx];
+            }
+        }
+    }
+
+    fasta_ptrs = mem_t<SpanFieldLong>(hdr.getSequenceDictionary().getAll().size(), q, memory_space_shared);
+
+    totSz = 0;
+    for (auto& references : fastaMap.getFullFasta()) {
+        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
+            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
+            totSz += references.second.size();
+            fasta_ptrs.data()[chrIdx] = SpanFieldLong(0, references.second.size());
+        }
+    }
+
+    fasta = mem_t<uint8_t>(totSz, q, memory_space_shared);
+
+    for (size_t idx = 1; idx < fasta_ptrs.size(); idx++) {
+        fasta_ptrs.data()[idx].start += fasta_ptrs.data()[idx-1].start + fasta_ptrs.data()[idx - 1].len;
+    }
+
+    for (auto& references : this->fastaMap.getFullFasta()) {
+        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
+            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
+            assert(fasta_ptrs.data()[chrIdx].len == references.second.size());
+            for (size_t intervIdx = 0; intervIdx < references.second.size(); intervIdx++) {
+                fasta.data()[fasta_ptrs.data()[chrIdx].start + intervIdx] = references.second[intervIdx];
+            }
+        }
+    }
+
+    Logger::getLogger().log(LOG_INFO, "Time to flatten fasta and intervals: " + std::to_string(t.elapsed()));
+    this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.QualityScores.size(), q, memory_space_t::memory_space_shared);
+    this->tables_context = mem_t<bqsrEntry>(recalibration_tables.Contexts.size(), q, memory_space_t::memory_space_shared);
+    this->tables_cycle = mem_t<bqsrEntry>(recalibration_tables.Cycles.size(), q, memory_space_t::memory_space_shared);
+
+
+    bqsrEntry defaultEntry;
+    defaultEntry.EmpiricalQuality = 0;
+    defaultEntry.Observations = -1;
+    defaultEntry.Mismatches = 0;
+
+    q.fill(tables_quality.data(), defaultEntry, recalibration_tables.QualityScores.size());
+    q.fill(tables_cycle.data(), defaultEntry, recalibration_tables.Cycles.size());
+    q.fill(tables_context.data(), defaultEntry, recalibration_tables.Contexts.size());
+    q.wait();
+    Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
 }
 
 void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, std::vector<combinedBqsrEntry>& table) {

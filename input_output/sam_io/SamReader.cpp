@@ -130,8 +130,6 @@ ssize_t SamReader::ParseAlignment(SamAlignments& reads){
     // process until there is no more reads to process
     // except first batch where there is not yet data
     while (first_batch || batch_process->buffer.has_data()) {
-
-
         auto processAsync = std::async(std::launch::async,
                                        [=, &reads]() {
                                            if (batch_process->header_to_process) {
@@ -145,13 +143,6 @@ ssize_t SamReader::ParseAlignment(SamAlignments& reads){
         inputAsync.wait();
         processAsync.wait();
 
-//        load_buffer(batch_transfer, in);
-//        parsing_f(batch_process, reads);
-
-        //batch_process->n_processed = batch_process->_n;
-//        if (!batch_process->header_to_process) {
-//            batch_transfer->header_to_process = false;
-//        }
         batch_transfer->header_to_process = batch_process->header_to_process;
         batch_transfer->remaining = batch_process->remaining;
         batch_transfer->n_processed = batch_process->n_processed;
@@ -159,27 +150,8 @@ ssize_t SamReader::ParseAlignment(SamAlignments& reads){
         first_batch = false;
     }
     reads.Resize(batch_transfer->n_processed);
-    reads.GetHdr().QnameMapper().finalize(reads.QNAME);
+    //reads.GetHdr().QnameMapper().finalize(reads.QNAME);
     return batch_transfer->n_processed;
-
-//    std::vector<ssize_t> lines_delims;
-//
-//    reads.Resize(BATCH_SIZE);
-//    if (buffer.is_empty()) {
-//        buffer.fill(in);
-//    }
-//    std::string remaining;
-//    ssize_t alnsRead = 0;
-//
-//    while (buffer.has_data()) {
-//
-//
-//        if(buffer.is_empty())
-//            buffer.fill(in);
-//    }
-//    reads.Resize(alnsRead);
-//    reads.GetHdr().QnameMapper().finalize(reads.QNAME);
-//    return alnsRead;
 }
 
 void SamReader::Close(){

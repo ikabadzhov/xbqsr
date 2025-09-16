@@ -8,18 +8,19 @@
 #include "../../sycl_parallel_library/intervalsmove/intervalmove.h"
 #include "ComputeCovariateVectorsData.h"
 #include "../../logger/Logger.h"
+#include "../../timer/Profiler.h"
 
 //[[clang::optnone]]
 void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>> batch) {
     if (batch->_n <= 0) {
         return;
     }
+    auto& profile = ProfilerBQSR::instance();
     Timer t;
     auto d_recalibrated = batch->_d_data.d_recalibrated;
     auto d_sequences = batch->_d_data.d_sequences;
     auto d_sequences_ptr = batch->_d_data.d_sequences_ptr;
     auto d_qualities = batch->_d_data.d_qualities;
-    //    auto d_qualities_ptr = batch->_d_data.d_qualities_ptr;
     auto d_cigar = batch->_d_data.d_cigar;
     auto d_cigar_start = batch->_d_data.d_cigar_start;
     auto d_cigar_len = batch->_d_data.d_cigar_len;
@@ -33,9 +34,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     auto d_flag = batch->_d_data.d_flag;
     auto d_reads_group_covariate = batch->_d_data.d_reads_group_covariate;
     auto d_skip_slice = batch->_d_data.d_skip_slice;
-    //    auto d_skip_slice_ptr = batch->_d_data.d_skip_slice_ptr;
     auto d_snps = batch->_d_data.d_snps;
-    //    auto d_snps_ptr = batch->_d_data.d_snps_ptr;
     auto d_stranded_seq = batch->_d_data.d_stranded_seq;
     auto d_stranded_seq_ptr = batch->_d_data.d_stranded_seq_ptr;
     auto d_base_context = batch->_d_data.d_base_context;
@@ -72,6 +71,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     size_t offset_sequences = batch->_d_data.d_sequence_span_offset;
     size_t offset_cigar = batch->_d_data.d_cigar_span_offset;
 
+
     t.reset();
     batch->_q_process.parallel_for<class SetOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
         d_cigar_start[idx] -= offset_cigar;
@@ -84,6 +84,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     Logger::getLogger().log(LOG_DEBUG, "    [SetOffset kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     t.reset();
+    profile.start(StageId::ComputeSkipVector);
     Timer t2;
     t2.reset();
     batch->_q_process.parallel_for<class ComputeSkipSliceVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
@@ -95,7 +96,6 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
             return;
         }
 
-        //int64_t sftStart = softStart(d_cigar + d_cigar_ptr[idx].start, d_cigar_ptr[idx].len, d_pos[idx]);
         int64_t sftStart = 0;
         {
             auto cigar = d_cigar + d_cigar_start[idx];
@@ -156,11 +156,12 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     });
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "        [ComputeSkipSliceVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-
+    profile.stop(StageId::ComputeSkipVector);
     //  cigar :                 || 14I  13I  9I   2D   10I  3I  ||  6I   9I   1M   8I ||  12D  13M  3D   3I   8I ||  15M  13M  15M ||
     //  cigars_op_segments :    || 0    14   27   36   38   48      51   57   66   67     75 ...
     //  i_offset :              || 14   27   36   36   46   49      55   64 ....
 
+    profile.start(StageId::ComputeSNPSVector);
     t2.reset();
     {
         enum { nt = 128, vt = 8, vt0 = 5, nv = nt*vt };
@@ -212,7 +213,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     }, batch->_d_data._n_expanded_cigar_ops, d_j_offset, plus_t<int32_t>(), discard_iterator_t<int32_t>(), batch->_q_process);
 
 
-    Logger::getLogger().log(LOG_DEBUG, "        [Extra kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+    //Logger::getLogger().log(LOG_DEBUG, "        [Extra kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
 
     t2.reset();
     {
@@ -296,7 +297,9 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     }
 
     Logger::getLogger().log(LOG_DEBUG, "        [ComputeSNPSVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+    profile.stop(StageId::ComputeSNPSVector);
 
+    profile.start(StageId::ComputeContextVector);
     t2.reset();
 
     batch->_q_process.parallel_for<class ComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
@@ -318,8 +321,11 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     batch->_q_process.wait_and_throw();
 
     Logger::getLogger().log(LOG_DEBUG, "        [ComputeContextKeysVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+    profile.stop(StageId::ComputeContextVector);
 
     Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateVectors kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+
+    profile.start(StageId::UpdateIndexes);
 
     t.reset();
     {
@@ -383,9 +389,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "    [CopyingSequencesOffsets kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-
     t.reset();
-
 
        {
         enum { nt = 128, vt = 7, vt0 = 5, nv = nt*vt };
@@ -490,7 +494,6 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     size_t total = batch->_d_data.table_sz;
     for (size_t offset = 0; offset < total; offset += batch_size) {
         //size_t current_size = min(batch_size, total - offset);
-
 
         /**
          * Quality
@@ -633,4 +636,5 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
         batch->_q_process.wait_and_throw();
     }
     Logger::getLogger().log(LOG_DEBUG, "    [Tables updates] Time: " + std::to_string(t.elapsed()) + " sec");
+    profile.stop(StageId::UpdateIndexes);
 }

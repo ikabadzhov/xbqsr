@@ -8,6 +8,7 @@
 #include "../intervals/Interval.h"
 #include "TablesBQSR.h"
 #include "../sam_data_structures/SamAlignments.h"
+#include "../sycl_parallel_library/memory/context.h"
 
 
 const int32_t INVALID_INDEX = INT32_MAX - 1;
@@ -85,10 +86,22 @@ uint32_t MaxContextCovariateKey();
  */
 class BaseRecalibrator {
 public:
+    BaseRecalibratorTables& recalibration_tables;
     MappedFasta& fastaMap;
     std::unordered_map<std::string, std::vector<Interval>> knownIntervals;
-    explicit BaseRecalibrator(MappedFasta& fastaMap) : fastaMap(fastaMap) {};
-    void Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle, BaseRecalibratorTables& result);
+    sycl::queue q;
+    mem_t<Interval> local_known_intervals;
+    mem_t<SpanFieldLong> local_known_intervals_ptrs;
+    mem_t<SpanFieldLong> fasta_ptrs;
+    mem_t<uint8_t> fasta;
+
+    mem_t<bqsrEntry> tables_quality;//(result.QualityScores.size(), q, memory_space_t::memory_space_shared);
+    mem_t<bqsrEntry> tables_cycle;//(result.Cycles.size(), q, memory_space_t::memory_space_shared);
+    mem_t<bqsrEntry> tables_context;//(result.Contexts.size(), q, memory_space_t::memory_space_shared);
+
+    explicit BaseRecalibrator(MappedFasta &fastaMap, std::vector<std::string> &knownSites,
+                              sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
+    void Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle);
     void close();
 };
 

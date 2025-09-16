@@ -20,7 +20,7 @@ public:
     const std::string& getFilePath() override;
     ssize_t read(std::string& buffer, ssize_t offset, ssize_t length) override;
     void seekg(ssize_t pos) override;
-    char peek() override;
+    int peek() override;
     bool good() override;
     bool bad() override;
     bool eof() override;

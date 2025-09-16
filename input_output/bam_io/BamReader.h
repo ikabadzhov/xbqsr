@@ -9,15 +9,16 @@
 #include "../utils/Constant.h"
 
 
+class InputBatchBam;
+
 class BamReader : public AlignmentReader {
 
     BufferReader buffer;
     std::string_view getslice(size_t numBytesToRead, size_t &numBytesRead);
-
 public:
     explicit BamReader(std::unique_ptr<InputStream> inputStream, ssize_t buffSz = DEFAULT_BUFFER_SIZE) : AlignmentReader(std::move(inputStream)),
                                                                                                          buffer(std::min(DEFAULT_BUFFER_SIZE, buffSz)) {
-        in->seekg(static_cast<ssize_t>(BAM_MAGIC.size()));
+        //in->seekg(static_cast<ssize_t>(BAM_MAGIC.size()));
     }
 
     void ParseHeader(Header& hdr) override;

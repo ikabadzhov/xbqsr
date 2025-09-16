@@ -14,7 +14,6 @@ enum memory_space_t {
 
 template<typename type_t>
 class mem_t {
-    //context_t* _context;
     sycl::queue _q;
     type_t* _pointer;
     size_t _size;
@@ -25,10 +24,12 @@ public:
         std::swap(_pointer, rhs._pointer);
         std::swap(_size, rhs._size);
         std::swap(_space, rhs._space);
+        std::swap(_q, rhs._q);
     }
 
     mem_t() :  _pointer(nullptr), _size(0),
               _space(memory_space_device) { }
+
     mem_t& operator=(const mem_t& rhs) = delete;
     mem_t(const mem_t& rhs) = delete;
 
@@ -63,15 +64,6 @@ public:
     [[nodiscard]] size_t size() const { return _size; }
     type_t* data() const { return _pointer; }
     [[nodiscard]] memory_space_t space() const { return _space; }
-
-
-    // Return a deep copy of this container.
-//    mem_t clone() {
-//        mem_t cloned(size(), context(), space());
-//        if(memory_space_device) dtod(cloned.data(), data(), size());
-//        else htoh(cloned.data(), data(), size());
-//        return cloned;
-//    }
 };
 
 #endif //TESTONEAPI_CONTEXT_H

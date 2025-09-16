@@ -11,6 +11,16 @@ class IOBatch {
 
 };
 
+class InputBatchBam {
+public:
+    BufferReader buffer;
+    std::string remaining;
+    size_t n_processed = 0;
+    bool header_to_process = true;
+
+    explicit InputBatchBam(size_t size) : buffer(size) {};
+
+};
 
 class InputBatchSam {
 public:

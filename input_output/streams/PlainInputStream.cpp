@@ -17,8 +17,8 @@ const std::string& PlainInputStream::getFilePath() {
     return path;
 }
 
-char PlainInputStream::peek() {
-    return static_cast<char>(in.peek());
+int PlainInputStream::peek() {
+    return in.peek();
 }
 
 bool PlainInputStream::eof() {

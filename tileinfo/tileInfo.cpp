@@ -64,8 +64,8 @@ tileInfo computeTileInfo(const std::string &QNAME) {
         y = stoi(qnameInfo[4]);
         break;
         default:
-            std::cout << "Warning: Unsupported qname format for extracting tile info. Cannot properly perform optical duplicate marking. "
-                      << nColumns << " columns." << std::endl;
+            // std::cout << "Warning: Unsupported qname format for extracting tile info. Cannot properly perform optical duplicate marking. "
+            //           << nColumns << " columns." << std::endl;
         return tileInfo{-1, -1, -1};
     }
     return tileInfo{static_cast<int16_t>(t), static_cast<int16_t>(x), static_cast<int16_t>(y)};

@@ -176,7 +176,7 @@ bool recalibrateAln(Header& hdr, size_t idx, uint8_t MAPQ, uint16_t FLAG, ssize_
     return false;
 }
 //[[clang::optnone]]
-void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, CigarOperation* cigar, SpanField cigar_ptr, uint8_t* ref, SpanFieldLong& refPtrs, int8_t* snps) {
+void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, CigarOperation* cigar, size_t cigar_start, uint16_t cigar_len, uint8_t* ref, SpanFieldLong& refPtrs, int8_t* snps) {
     //size_t readLength = sequencePtrs.len;
 
     size_t snps_i=0;
@@ -184,8 +184,8 @@ void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, Cigar
     size_t i = sequencePtrs.start;
     auto j = POS - 1;
 
-    for (size_t c = 0; c < cigar_ptr.len; c++){
-        CigarOperation cigarOp = cigar[cigar_ptr.start + c];
+    for (size_t c = 0; c < cigar_len; c++){
+        CigarOperation cigarOp = cigar[cigar_start + c];
         auto ln = static_cast<int32_t>(cigarOp.Length);
         switch (cigarOp.Operation) {
             case 'M':

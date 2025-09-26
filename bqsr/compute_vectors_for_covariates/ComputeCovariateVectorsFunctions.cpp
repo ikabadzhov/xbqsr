@@ -164,135 +164,19 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     profile.start(StageId::ComputeSNPSVector);
     t2.reset();
     {
-        enum { nt = 128, vt = 8, vt0 = 5, nv = nt*vt };
-        typedef cta_load_balance_t<nt, vt> load_balance_t;
+        batch->_q_process.parallel_for<class ComputeSNPSVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
 
-        union SharedMemory {
-            load_balance_t::storage_t lbs;
-        };
+            if (!d_recalibrated[idx]) {
+                return;
+            }
+            if (d_sequences_ptr[idx].len == 0) {
+                return;
+            }
 
-        size_t num_segments = batch->_n;
-        size_t tot_cigars = batch->_d_data._n_expanded_cigar_ops;
-
-        uint32_t num_ctas = div_up(tot_cigars + num_segments, size_t(nv));
-        mem_t<size_t> mp = load_balance_partitions_long(tot_cigars, d_cigar_start, num_segments, nv, batch->_d_data._q);
-
-        auto mp_data = mp.data();
-
-        batch->_q_process.submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<SharedMemory, 1> shared(sycl::range<1>(1), cgh);
-
-            cgh.parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_ctas * nt),
-                sycl::range<1>(nt)),
-                [=, d_cigar_segments = d_cigar_start](sycl::nd_item<1> item) {
-
-                    int tid = item.get_local_id(); // Current work-item index
-                    int cta = item.get_group(0); // Current work-group index
-
-                    auto lbs = cta_load_balance_t<nt, vt>().load_balance(tot_cigars, d_cigar_segments, num_segments, tid, cta, mp_data, shared[0].lbs, item);
-
-                    strided_iterate<nt, vt, vt>([&](int k, int j) {
-                        int output_i = lbs.merge_range.a_begin + j;
-                        int idx = lbs.segments[k];
-                        d_read_index[output_i] = idx;
-                    }, tid, lbs.merge_range.a_count());
-            });
-        });
-        batch->_q_process.wait_and_throw();
-    }
-
-    mem_t<int32_t> count2(1, batch->_q_process, memory_space_device);
-
-    transform_scan<int32_t, scan_type_exc>([=](int i) {
-        return (d_cigar[i].Operation == 'M' || d_cigar[i].Operation == 'X' ||  d_cigar[i].Operation == 'I' ||  d_cigar[i].Operation == 'S' || d_cigar[i].Operation == '=') ? d_cigar[i].Length : 0;
-    }, batch->_d_data._n_expanded_cigar_ops, d_i_offset, plus_t<int32_t>(), count2.data(), batch->_q_process);
-
-    transform_scan<int32_t, scan_type_exc>([=](int i) {
-        return (d_cigar[i].Operation == 'M' || d_cigar[i].Operation == 'X' ||  d_cigar[i].Operation == 'D' ||  d_cigar[i].Operation == 'N' || d_cigar[i].Operation == '=') ? d_cigar[i].Length : 0;
-    }, batch->_d_data._n_expanded_cigar_ops, d_j_offset, plus_t<int32_t>(), discard_iterator_t<int32_t>(), batch->_q_process);
-
-
-    //Logger::getLogger().log(LOG_DEBUG, "        [Extra kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-
-    t2.reset();
-    {
-
-        enum { nt = 128, vt = 8, vt0 = 5, nv = nt*vt };
-
-        typedef cta_load_balance_t<nt, vt> load_balance_t;
-
-        union SharedMemory {
-            load_balance_t::storage_t lbs;
-        };
-
-        int32_t totalOps = batch->_d_data._n_expanded_cigar_ops;
-
-        int32_t count = 0;
-
-        batch->_q_process.memcpy(&count, count2.data(), sizeof(count)).wait();
-
-        size_t num_segments = batch->_d_data._n_expanded_cigar_ops;
-
-        uint32_t num_ctas = div_up((size_t)count + num_segments, size_t(nv));
-        mem_t<int> mp = load_balance_partitions(count, d_i_offset, num_segments, nv, batch->_d_data._q);
-
-        auto mp_data = mp.data();
-
-        batch->_q_process.submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<SharedMemory, 1> shared(sycl::range<1>(1), cgh);
-
-            cgh.parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_ctas * nt),
-                sycl::range<1>(nt)),
-                  [=, totalBases=count](sycl::nd_item<1> item) {
-
-                      int tid = item.get_local_id(); // Current work-item index
-                      int cta = item.get_group(0); // Current work-group index
-
-                      auto lbs = cta_load_balance_t<nt, vt>().load_balance(count, d_i_offset, num_segments, tid, cta, mp_data, shared[0].lbs, item);
-
-                      strided_iterate<nt, vt, vt>([&](int k, int j) {
-                          int global_tid = lbs.merge_range.a_begin + j;
-                          int opIdx = lbs.segments[k];
-                          int rank = lbs.ranks[k];
-                          int readId = d_read_index[opIdx];
-
-                          auto op = d_cigar[opIdx];
-                          auto seqPtr = d_sequences_ptr[readId];
-
-                          if (!d_recalibrated[readId])
-                               return;
-
-                          if (rank >= op.Length)
-                              return;
-
-                          if (!(op.Operation=='M' || op.Operation=='=' || op.Operation=='X'))
-                              return;    // skip indels/clips
-
-                          if (seqPtr.len == 0)
-                              return;
-
-                          int cigarStart = d_cigar_start[readId];
-                          int32_t pos0   = d_pos[readId] - 1;
-                          auto refPtr    = d_reference_ptr[d_rname[readId]];
-
-                          int tileBase   = d_i_offset[opIdx] - d_i_offset[cigarStart];
-                          int tileRefOff = d_j_offset[opIdx] - d_j_offset[cigarStart];
-
-                          int baseOff = tileBase + rank;
-                          int seqIdx  = seqPtr.start + baseOff;
-                          int refIdx  = pos0  + tileRefOff + rank;
-
-                          auto r = baseToIntMap[d_sequences[seqIdx]];
-                          auto g = baseToIntMap[d_reference[refPtr.start + refIdx]];
-
-                          if (r != g) {
-                              d_snps[seqPtr.start + baseOff] = 1;
-                          }
-                      }, tid, lbs.merge_range.a_count());
-                  });
-        });
+            computeSnpEvents(d_sequences, d_sequences_ptr[idx], d_pos[idx],
+                             d_cigar, d_cigar_start[idx], d_cigar_len[idx], d_reference, d_reference_ptr[d_rname[idx]],
+                            d_snps + d_sequences_ptr[idx].start/*d_snps_ptr[idx].start*/);
+    });
         batch->_q_process.wait_and_throw();
     }
 

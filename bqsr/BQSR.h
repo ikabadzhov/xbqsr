@@ -160,7 +160,7 @@ SYCL_EXTERNAL void computeBaseContextCovariate(bool isReversed, char* strandedCl
 SYCL_EXTERNAL void contextWith(char* bases, SpanField basesPtrs, int32_t contextSize, int32_t* keys, uint16_t& keysLength);
 SYCL_EXTERNAL CycleCovariatesResult prepareCycleCovariates(uint16_t sequence_len, uint16_t FLAG);
 SYCL_EXTERNAL int32_t computeBaseCycleCovariate( int32_t cycleFactor, int32_t increment, uint32_t index, int32_t maxCycle );
-SYCL_EXTERNAL void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, CigarOperation* cigar, SpanField cigar_ptr, uint8_t* ref, SpanFieldLong& refPtrs, int8_t* snps);
+SYCL_EXTERNAL void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, CigarOperation* cigar, size_t cigar_start, uint16_t cigar_len, uint8_t* ref, SpanFieldLong& refPtrs, int8_t* snps);
 SYCL_EXTERNAL double estimateHierarchicalBayesianQuality(double epsilon, combinedBqsrEntry& empiricalReadGroupEntry, bqsrEntry& empiricalBqEntry, bqsrEntry& empiricalContextEntry, bqsrEntry& empiricalCycleEntry);
 SYCL_EXTERNAL int32_t fastRound(double d);
 

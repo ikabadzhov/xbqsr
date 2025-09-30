@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
     bool sorting = false;
 
     bool bqsr = false;
+    bool applyBqsr = false;
 
     string input_filename;
     basic_string<char> output_filename;
@@ -119,6 +120,20 @@ int main(int argc, char **argv) {
         }
     }
 
+    if( vm.count("applyBqsr") ){
+        if ( vm.count("reference") ) {
+            recal_filename = vm["applyBqsr"].as<string>();
+            echo_command += ("--bqsr " + recal_filename + " ");
+            reference_filename = vm["reference"].as<string>();
+            echo_command += ("--reference " + reference_filename + " ");
+            applyBqsr = true;
+        } else {
+            std::cerr << "Reference file not specified for applyBqsr step." << std::endl;
+            std::cerr << description << std::endl;
+            exit(-1);
+        }
+    }
+
     if (vm.count("known-sites")) {
         std::string sites = vm["known-sites"].as<std::string>();
         echo_command += ("--known-sites ");
@@ -140,7 +155,6 @@ int main(int argc, char **argv) {
     }
 
     sycl::device device(sycl::gpu_selector_v);
-    //sycl::queue q(device);
 
     sycl::queue q(device);
 
@@ -156,7 +170,6 @@ int main(int argc, char **argv) {
 
     std::unique_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(input_filename);
 
-    //alignmentReader->ParseHeader(alignments.GetHdr());
     size_t nAlns = alignmentReader->ParseAlignment(alignments);
     assert(nAlns == alignments.GetAlnsNum());
 
@@ -167,27 +180,22 @@ int main(int argc, char **argv) {
         addREFID(alignments, idx);
     }
 
+    int maxCycle = 500;
 
     if (bqsr) {
         print_stage_header("BQSR I - Recalibrate");
-
         t.reset();
 
         MappedFasta referenceGenome;
-
         referenceGenome.Open(reference_filename);
-
 
         Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t.elapsed()) + " sec");
 
         t.reset();
-
-        int maxCycle = 500;
         BaseRecalibratorTables baseRecalibratorTables(alignments.TAGS.RG.NumEntriesTable(), 94,
-                                                      maxCycle);//TODO: Make the size as function of context size
+                                                      maxCycle);
 
         std::unique_ptr<BaseRecalibrator> baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, alignments.GetHdr(), baseRecalibratorTables);
-
 
         baseRecal->Recalibrate(device, alignments, maxCycle);
         baseRecalibratorTables.FinalizeBQSRTables();
@@ -196,11 +204,17 @@ int main(int argc, char **argv) {
 
         baseRecalibratorTables.PrintBQSRTables(recal_filename, alignments.TAGS.RG, alignments.TMP.reads_group_covariate_);
 
-        t.reset();
+
+    }
+    if (applyBqsr) {
         print_stage_header("BQSR II - Apply Recalibration");
+        t.reset();
 
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
+
+        BaseRecalibratorTables baseRecalibratorTables(alignments.TAGS.RG.NumEntriesTable(), 94,
+                                                      maxCycle);//TODO: Make the size as function of context size
 
         baseRecalibratorTables.ApplyBQSR(device, alignments, quantize_level, sqqList, maxCycle);
 
@@ -209,20 +223,21 @@ int main(int argc, char **argv) {
 
     }
 
-    print_stage_header("Writing SAM File");
+    if (applyBqsr) {
+        print_stage_header("Writing SAM File");
 
-    std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(output_filename);
+        std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(output_filename);
 
-    Logger::getLogger().log(LOG_INFO, "Start writing output file" + std::to_string(t.elapsed()) + " sec");
+        Logger::getLogger().log(LOG_INFO, "Start writing output file" + std::to_string(t.elapsed()) + " sec");
 
-    t.reset();
+        t.reset();
 
-    wf->FormatHeader(alignments.GetHdr());
+        wf->FormatHeader(alignments.GetHdr());
 
-    wf->FormatAlignment(alignments);
+        wf->FormatAlignment(alignments);
 
-    Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t.elapsed()) + " sec");
-
+        Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t.elapsed()) + " sec");
+    }
     return 0;
 }
 

@@ -9,7 +9,7 @@
 #include <cstdint>
 
 //const ssize_t DEFAULT_BUFFER_SIZE = 2147483647; //2GB
-const ssize_t DEFAULT_BUFFER_SIZE = (1UL << 30);//static_cast<size_t>(std::pow(2,30)); //1GB //10000000; //200MB
+const ssize_t DEFAULT_BUFFER_SIZE = (2UL << 30) - 1;//static_cast<size_t>(std::pow(2,30)); //1GB //10000000; //200MB
 static const ssize_t BATCH_SIZE = (1UL << 20);
 
 const std::string_view BAM_MAGIC = "BAM\u0001";

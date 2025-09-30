@@ -1,6 +1,7 @@
 #include <future>
 #include "BamReader.h"
 #include "BamUtilsIO.h"
+#include "../../timer/ProfilerIO.h"
 #include "../parser/SamHeaderParser.h"
 #include "../parser/BamAlignmentParser.h"
 
@@ -185,7 +186,10 @@ static void parse_bam_header(std::unique_ptr<InputStream>& in, SamAlignments& re
 }
 
 static void load_batch(const std::shared_ptr<InputBatchBam> &bt, std::unique_ptr<InputStream> &in) {
+    auto& profiler = ProfilerIO::instance();
+    profiler.start(IOStageId::DataLoading);
     bt->buffer.fill(in);
+    profiler.stop(IOStageId::DataLoading);
 };
 
 // --- Carry state for a single BAM record across batches ---
@@ -197,7 +201,7 @@ struct Carry {
     Carry() { bin.reserve(4096); }     // small upfront reserve reduces churn
 } ;
 
-static void ensure_capacity(SamAlignments& reads, size_t used, size_t GROW = 4096) {
+static void ensure_capacity(SamAlignments& reads, size_t used, size_t GROW) {
     if (used == reads.GetAlnsNum()) {
         reads.Resize(reads.GetAlnsNum() + GROW);  // if you have Reserve(cap), prefer that
     }
@@ -307,10 +311,12 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
 
     bp->n_processed = alnsRead; // cumulative reporting
 }*/
-
+//[[clang::optnone]]
 static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignments& reads,
                              size_t& alnsRead, Carry& carry) {
     auto& buf = bp->buffer;
+    auto& profiler = ProfilerIO::instance();
+    profiler.start(IOStageId::ProcessBatch);
 
     while (buf.has_data()) {
         // Consume up to 'need' bytes for the current stage
@@ -320,15 +326,21 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignment
         const size_t take = static_cast<size_t>(
                 std::min<int64_t>(carry.need, static_cast<int64_t>(avail)));
         size_t got = 0;
-        std::string_view chunk = buf.getslice(take, got);
-        if (got == 0) break;
 
+        profiler.start(IOStageId::GetSlice);
+        std::string_view chunk = buf.getslice(take, got);
+        profiler.stop(IOStageId::GetSlice);
+
+        if (got == 0) break;
+        profiler.start(IOStageId::AppendInBin);
         // Accumulate into carry
-        carry.bin.append(chunk.data(), got);
+        //carry.bin.append(chunk.data(), got);
         carry.need -= static_cast<int32_t>(got);
+        profiler.stop(IOStageId::AppendInBin);
 
         if (carry.need > 0) {
             // Need more bytes → let loader run; we’ll resume after swap
+            carry.bin.append(chunk.data(), got);
             break;
         }
 
@@ -336,26 +348,39 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignment
         if (carry.stage == Carry::ReadLen) {
             // Decode little-endian 32-bit block_size
             int32_t raw_len = 0;
+            carry.bin.append(chunk.data(), got);
             std::memcpy(&raw_len, carry.bin.data(), sizeof(raw_len));
+            carry.bin.clear();
             const int32_t block = raw_len; // ByteScanner reads LE elsewhere; convert if needed
 
             // Sanity checks (64MB guard is generous)
             if (block <= 0 || block > (64 * 1024 * 1024)) {
                 throw std::runtime_error("Invalid BAM block_size");
             }
-
+            profiler.start(IOStageId::AppendInBin);
             carry.block = block;
-            carry.bin.clear();
-            carry.bin.reserve(static_cast<size_t>(carry.block));
+            //carry.bin.clear();
+            //carry.bin.reserve(static_cast<size_t>(carry.block));
             carry.need  = carry.block;
             carry.stage = Carry::ReadBody;
+            profiler.stop(IOStageId::AppendInBin);
             continue;
         }
 
         // ReadBody complete → parse exactly one record
-        ensure_capacity(reads, alnsRead);
-        BamAlignmentParser::ParseBamAlignmentFromSlice(
-                std::string_view(carry.bin.data(), carry.bin.size()), reads, alnsRead);
+        profiler.start(IOStageId::EnsureCapacity);
+        ensure_capacity(reads, alnsRead, 10*(1<<20));
+        profiler.stop(IOStageId::EnsureCapacity);
+
+        if (carry.bin.empty()) {
+            BamAlignmentParser::ParseBamAlignmentFromSlice(chunk, reads, alnsRead);
+        } else {
+            carry.bin.append(chunk.data(), got);
+            assert(carry.bin.size() == carry.block);
+            BamAlignmentParser::ParseBamAlignmentFromSlice(carry.bin, reads, alnsRead);
+            carry.bin.clear();
+        }
+
         ++alnsRead;
 
         // Reset for next record
@@ -368,6 +393,7 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignment
     }
 
     bp->n_processed = alnsRead; // keep your cumulative reporting
+    profiler.stop(IOStageId::ProcessBatch);
 }
 
 // BamReader::ParseAlignment — optimized, BufferReader untouched
@@ -388,18 +414,21 @@ ssize_t BamReader::ParseAlignment(SamAlignments& reads) {
 
     // Process until both buffer is drained AND no partial body remains
     while (first_batch ||
-           batch_process->buffer.has_data() ||
-           (carry.stage == Carry::ReadBody && carry.need > 0)) {
+           batch_process->buffer.has_data()) {
 
         // Process current batch and load next in parallel
-        auto processF = std::async(std::launch::async,
-                                   [&, batch_process] { process_batch(batch_process, reads, alnsRead, carry); });
+        //auto processF = std::async(std::launch::async,
+          //                         [&, batch_process] {
+            process_batch(batch_process, reads, alnsRead, carry);
+                                   //});
 
-        auto inputF   = std::async(std::launch::async,
-                                   [&, batch_transfer] { load_batch(batch_transfer, in); });
+       // auto inputF   = std::async(std::launch::async,
+           //                        [&, batch_transfer] {
+            load_batch(batch_transfer, in);
+           //                        });
 
-        inputF.get();
-        processF.get();
+        // inputF.get();
+        // processF.get();
 
         // Propagate cumulative counters if you use them elsewhere (kept for parity)
         batch_transfer->header_to_process = batch_process->header_to_process;
@@ -413,6 +442,8 @@ ssize_t BamReader::ParseAlignment(SamAlignments& reads) {
     // Shrink to actual count and finalize
     reads.Resize(alnsRead);
     //reads.GetHdr().QnameMapper().finalize(reads.QNAME);
+    auto& profiler = ProfilerIO::instance();
+    profiler.report();
     return static_cast<ssize_t>(alnsRead);
 }
 

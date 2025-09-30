@@ -11,12 +11,15 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -g -O2")
 
-
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=nvptx64-nvidia-cuda -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_89 -Wall")
 #SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=nvptx64-nvidia-cuda,spir64_x86_64 -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_89 -Wall")
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl")
 
+file(GLOB LIB_SOURCES
+		${CMAKE_CURRENT_SOURCE_DIR}/libdeflate/*.c
+		${CMAKE_CURRENT_SOURCE_DIR}/libdeflate/*/*.c
+)
 find_package(ZLIB REQUIRED)
 find_package(Boost 1.63.0 COMPONENTS program_options REQUIRED)
 find_package(TBB)
@@ -145,6 +148,7 @@ add_executable(bqsr main.cpp
 		input_output/bam_io/BamUtilsIO.h
 		timer/Profiler.cpp
 		timer/Profiler.h
+		timer/ProfilerIO.h
 )
 
 target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB)

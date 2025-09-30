@@ -382,7 +382,6 @@ std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
 
 // Recalibrate implements the first step of base recalibration.
 void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle) {
-    Timer timer;
     Timer timerAll;
     auto& profiler = ProfilerBQSR::instance();
     timerAll.reset();

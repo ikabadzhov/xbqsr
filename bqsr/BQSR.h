@@ -69,13 +69,13 @@ public:
                    int32_t maxCycle);
 
     void
-    PrintBQSRTables(const std::string &filename, CompressedStringCollection &RG, CompressedStringCollection& readsGroupCovariate);
+    PrintBQSRTables(const std::string &filename, CompressedStringCollection &RG, Header &hdr);
 
 private:
-    void printOtherCovariateTable(std::ostream& file, CompressedStringCollection& RG);
-    void printBQSRTable(std::ofstream& filename, CompressedStringCollection& RG);
+    void printOtherCovariateTable(std::ostream& file, Header &hdr);
+    void printBQSRTable(std::ofstream& filename, Header &hdr);
     void printQuantizationTable(std::ofstream &file);
-    void printCombinedBQSRTable(std::ostream& file, CompressedStringCollection& RG, CompressedStringCollection& readsGroupCovariate);
+    void printCombinedBQSRTable(std::ostream& file, CompressedStringCollection& RG, Header &hdr);
 };
 
 uint32_t MaxContextCovariateKey();
@@ -101,6 +101,7 @@ public:
 
     explicit BaseRecalibrator(MappedFasta &fastaMap, std::vector<std::string> &knownSites,
                               sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
+    void getTables(BaseRecalibratorTables& recalibration_tables);
     void Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle);
     void close();
 };

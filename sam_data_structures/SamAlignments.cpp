@@ -84,11 +84,15 @@ void SamAlignments::ResizeAdaptScore(size_t sz) {
 }
 
 Header& SamAlignments::GetHdr() {
-    return hdr;
+    return *hdr;
 }
 
 size_t SamAlignments::GetAlnsNum() const {
     return N_ALNS;
+}
+
+void SamAlignments::SetAlnsNum(size_t n) {
+    N_ALNS = n;
 }
 
 ssize_t SamAlignments::GetQNAME(size_t idx) const {

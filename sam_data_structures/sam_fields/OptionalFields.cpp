@@ -5,7 +5,9 @@
 
 void OptionalFields::Resize(size_t sz) {
     RG.Resize(sz);
-    IntegerTags.Resize(sz);
+    tagsBlobOff.resize(sz, 0);
+    tagsBlobSize.resize(sz, 0);
+    /*IntegerTags.Resize(sz);
     FloatTags.Resize(sz);
     StringTags.Resize(sz);
     CharTags.Resize(sz);
@@ -18,7 +20,7 @@ void OptionalFields::Resize(size_t sz) {
     ArrayTags_S.Resize(sz);
     ArrayTags_i.Resize(sz);
     ArrayTags_I.Resize(sz);
-    ArrayTags_f.Resize(sz);
+    ArrayTags_f.Resize(sz);*/
 }
 
 void OptionalFields::Permute(std::vector<size_t> &indices) {

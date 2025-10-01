@@ -57,13 +57,15 @@ private:
     /**
      * Header fields
      **/
-    Header hdr;
+    std::shared_ptr<Header> hdr;
     size_t N_ALNS{};
 
     /**
      * Mandatory fields
      **/
 public:
+    explicit SamAlignments(std::shared_ptr<Header> h) : hdr(std::move(h)) {}
+
     std::vector<int32_t> QNAME; // TODO: For the moment òet's keep it int32_t because the empty string is represented with -1, but later change everything in uint32_t
     std::vector<tileInfo> TILE;
     std::vector<int32_t> RNAME;
@@ -90,6 +92,7 @@ public:
 
     [[nodiscard]] Header& GetHdr();
     size_t GetAlnsNum() const;
+    void SetAlnsNum(size_t n);
 
     void Permute(std::vector<size_t>& indices);
 

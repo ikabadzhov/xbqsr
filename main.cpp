@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
     string bed_filename;
 
     /* Input parsing variable section */
-    SamAlignments alignments;
+    std::vector<SamAlignments> alignments;
 
     std::vector<std::string> knownSites;
 
@@ -165,46 +165,63 @@ int main(int argc, char **argv) {
     Logger::getLogger().log(LOG_INFO, "Running: " + echo_command);
 
 
-    t.reset();
-    print_stage_header("Reading SAM File");
-
+    std::shared_ptr<Header> header;
     std::unique_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(input_filename);
+    header = std::make_shared<Header>();
+    alignmentReader->ParseHeader(*header);
 
-    size_t nAlns = alignmentReader->ParseAlignment(alignments);
-    assert(nAlns == alignments.GetAlnsNum());
 
-    Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t.elapsed()) + " sec");
+    std::thread loader_sam([&]() {
+        t.reset();
+        print_stage_header("Reading SAM File");
+        size_t nAlns = alignmentReader->ParseAlignment(alignments, header);
+        assert(nAlns == alignments.GetAlnsNum());
 
-    auto addREFID = Filter::AddREFID(alignments);
-    for (size_t idx = 0; idx < alignments.GetAlnsNum(); idx++) {
-        addREFID(alignments, idx);
+        Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t.elapsed()) + " sec");
+    });
+
+    std::unique_ptr<BaseRecalibrator> baseRecal;
+    std::unique_ptr<BaseRecalibratorTables> baseRecalibratorTables;
+
+    size_t maxCycle = 500;
+
+    if (bqsr) {
+        std::thread loader_fasta([&]() {
+            baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(header->getReadGroupRecord().size(), 94,
+                                                             maxCycle);
+            MappedFasta referenceGenome;
+            referenceGenome.Open(reference_filename);
+            baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, *header, *baseRecalibratorTables);
+        });
+        loader_fasta.join();
     }
 
-    int maxCycle = 500;
+    loader_sam.join();
+
+    for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
+        auto addREFID = Filter::AddREFID(alignments[batchIdx]);
+        for (size_t idx = 0; idx < alignments[batchIdx].GetAlnsNum(); idx++) {
+            addREFID(alignments[batchIdx], idx);
+        }
+    }
 
     if (bqsr) {
         print_stage_header("BQSR I - Recalibrate");
         t.reset();
 
-        MappedFasta referenceGenome;
-        referenceGenome.Open(reference_filename);
-
         Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t.elapsed()) + " sec");
 
         t.reset();
-        BaseRecalibratorTables baseRecalibratorTables(alignments.TAGS.RG.NumEntriesTable(), 94,
-                                                      maxCycle);
 
-        std::unique_ptr<BaseRecalibrator> baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, alignments.GetHdr(), baseRecalibratorTables);
-
-        baseRecal->Recalibrate(device, alignments, maxCycle);
-        baseRecalibratorTables.FinalizeBQSRTables();
+        for (size_t i = 0; i < alignments.size(); i++) {
+            baseRecal->Recalibrate(device, alignments[i], maxCycle);
+        }
+        baseRecal->getTables(*baseRecalibratorTables);
+        baseRecalibratorTables->FinalizeBQSRTables();
 
         Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t.elapsed()) + " sec");
 
-        baseRecalibratorTables.PrintBQSRTables(recal_filename, alignments.TAGS.RG, alignments.TMP.reads_group_covariate_);
-
-
+        baseRecalibratorTables->PrintBQSRTables(recal_filename, alignments[0].TAGS.RG, alignments[0].GetHdr());
     }
     if (applyBqsr) {
         print_stage_header("BQSR II - Apply Recalibration");
@@ -213,10 +230,10 @@ int main(int argc, char **argv) {
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
 
-        BaseRecalibratorTables baseRecalibratorTables(alignments.TAGS.RG.NumEntriesTable(), 94,
+        BaseRecalibratorTables baseRecalibratorTables(alignments[0].TAGS.RG.NumEntriesTable(), 94,
                                                       maxCycle);//TODO: Make the size as function of context size
 
-        baseRecalibratorTables.ApplyBQSR(device, alignments, quantize_level, sqqList, maxCycle);
+        baseRecalibratorTables.ApplyBQSR(device, alignments[0], quantize_level, sqqList, maxCycle);
 
 
         Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t.elapsed()) + " sec");
@@ -232,9 +249,9 @@ int main(int argc, char **argv) {
 
         t.reset();
 
-        wf->FormatHeader(alignments.GetHdr());
+        wf->FormatHeader(alignments[0].GetHdr());
 
-        wf->FormatAlignment(alignments);
+        wf->FormatAlignment(alignments[0]);
 
         Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t.elapsed()) + " sec");
     }

@@ -19,6 +19,8 @@ public:
     std::string_view getslice(char delim, bool& isDelimFound);
     std::string_view getslice(size_t numBytesToRead, size_t &numBytesRead);
 
+    std::string_view getslicerange(size_t begin, size_t end);
+
     char peek();
 
     [[maybe_unused]] [[nodiscard]] bool has_data() const;

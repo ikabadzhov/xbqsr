@@ -49,6 +49,18 @@ std::string_view BufferReader::getslice(size_t numBytesToRead, size_t& numBytesR
     return {buffer.data() + oldPos, numBytesRead};
 }
 
+std::string_view BufferReader::getslicerange(size_t begin, size_t end) {
+    if (begin > end) {
+        throw std::out_of_range("BufferReader::getslice: begin > end");
+    }
+    if (end > count) {
+        throw std::out_of_range("BufferReader::getslice: end beyond valid data");
+    }
+    // Create a string_view for the slice
+    size_t sz = end - begin;
+    return {buffer.data() + begin, sz};
+}
+
 /*std::string_view BufferReader::getslice(size_t numBytesToRead, size_t& numBytesRead) {
     if (pos >= count) {
         numBytesRead = 0;

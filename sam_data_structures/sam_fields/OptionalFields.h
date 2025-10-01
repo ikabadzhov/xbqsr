@@ -9,11 +9,16 @@
 
 class OptionalFields {
 public:
+
+    std::vector<size_t> tagsBlobOff;
+    std::vector<size_t> tagsBlobSize;
+    std::vector<std::byte> tagArena;
+    CompressedStringCollection RG;
+
     std::map<uint16_t, TagKeyAndType> ALL_TAGS;
     /*
     * Specific TAG
     * */
-    CompressedStringCollection RG;
 
     /*
     * Generic TAG

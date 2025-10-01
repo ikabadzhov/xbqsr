@@ -20,7 +20,7 @@ public:
     explicit AlignmentReader(std::unique_ptr<InputStream> inStream) : in(std::move(inStream)) {};
     virtual void ParseHeader(Header& hdr) = 0;
 
-    virtual ssize_t ParseAlignment(SamAlignments& reads) = 0;
+    virtual ssize_t ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header) = 0;
     virtual void Close() = 0;
     virtual ~AlignmentReader() = default;
     bool isEOF();

@@ -34,5 +34,7 @@ public:
 
     size_t getIndex();
     size_t incrementIndex(size_t n);
+
+    size_t setIndex(size_t pos);
 };
 #endif //GENOMICPIPELINE_BYTESCANNER_H

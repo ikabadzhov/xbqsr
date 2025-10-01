@@ -121,7 +121,7 @@ void load_buffer(std::shared_ptr<InputBatchSam> batch, std::unique_ptr<InputStre
 }
 
 
-ssize_t SamReader::ParseAlignment(SamAlignments& reads){
+ssize_t SamReader::ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header){
     std::shared_ptr<InputBatchSam> batch_transfer = std::make_shared<InputBatchSam>(DEFAULT_BUFFER_SIZE);
     std::shared_ptr<InputBatchSam> batch_process = std::make_shared<InputBatchSam>(DEFAULT_BUFFER_SIZE);
 
@@ -133,9 +133,9 @@ ssize_t SamReader::ParseAlignment(SamAlignments& reads){
         auto processAsync = std::async(std::launch::async,
                                        [=, &reads]() {
                                            if (batch_process->header_to_process) {
-                                               parse_header(batch_process, reads);
+                                               parse_header(batch_process, reads[0]);
                                            }
-                                           parse_alignments(batch_process, reads);
+                                           parse_alignments(batch_process, reads[0]);
                                        }
         );
         auto inputAsync = std::async(std::launch::async, load_buffer, batch_transfer, std::ref(in));
@@ -149,7 +149,8 @@ ssize_t SamReader::ParseAlignment(SamAlignments& reads){
         std::swap(batch_process, batch_transfer);
         first_batch = false;
     }
-    reads.Resize(batch_transfer->n_processed);
+
+    //reads.Resize(batch_transfer->n_processed);
     //reads.GetHdr().QnameMapper().finalize(reads.QNAME);
     return batch_transfer->n_processed;
 }

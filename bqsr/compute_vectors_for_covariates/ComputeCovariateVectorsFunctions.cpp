@@ -384,7 +384,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
          */
         mergesort_developer_version(d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz, less_t<key_t>(),
                   batch->_q_process, d_temporary_keys, d_temporary_vals);
-
+        // [k1, 0] [k1, 2] [k1, 0] [k1, 3] [k2, 0] [k2, 6] [k2, 1]
+        // [k1, 5], [k2, 7] ...
         Logger::getLogger().log(LOG_DEBUG, "    [Mergesort] Time: " + std::to_string(t.elapsed()) + " sec");
 
         int32_t num_segments_quality = 0;

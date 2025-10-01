@@ -88,6 +88,10 @@ size_t ByteScanner::incrementIndex(size_t n) {
     return index += n;
 }
 
+size_t ByteScanner::setIndex(size_t pos) {
+    return index = pos;
+}
+
 float ByteScanner::readFloat() {
     checkAvailable(sizeof(float));
 

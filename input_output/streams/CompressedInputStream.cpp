@@ -49,8 +49,9 @@ CompressedInputStream::CompressedInputStream(const std::string &input): path(inp
     // temp buffers (grown on demand)
     //tmp_decomp_.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::vector<uint8_t>(BGZF_BLOCK_SIZE)); // BGZF blocks decompress to ≤ 64 KiB
     //tmp_comp_.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::vector<uint8_t>(BGZF_BLOCK_SIZE)); // BGZF blocks compress to ≤ 64 KiB
-    tmp_decomp_.resize(opts.stash_cap_bytes); // BGZF blocks decompress to ≤ 64 KiB
-    tmp_comp_.resize(opts.stash_cap_bytes);
+    //tmp_decomp_.resize(opts.stash_cap_bytes); // BGZF blocks decompress to ≤ 64 KiB
+    //tmp_comp_.resize(opts.stash_cap_bytes);
+    comp_pool.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::array<uint8_t, BGZF_BLOCK_SIZE>{});
 }
 
 static inline unsigned U8(char c) { return static_cast<unsigned char>(c); }
@@ -86,8 +87,9 @@ struct BlockPlan {
     size_t   dest_off;    // offset (relative to stash tail) where this block will write
 };
 
-ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t length) {
-    // --- Validate args ---
+ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t length)
+{
+    // ---- validate args ----
     if (length < 0 || offset < 0)
         throw std::out_of_range("CompressedInputStream::read: negative offset/length");
     const size_t uoff = static_cast<size_t>(offset);
@@ -95,11 +97,18 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
     if (uoff > buffer.size() || uoff + ulen > buffer.size())
         throw std::out_of_range("CompressedInputStream::read: buffer too small for requested span");
 
+    // Safety: comp_pool must have been resized (not reserved) in ctor
+    if (comp_pool.empty())
+        throw std::logic_error("CompressedInputStream: comp_pool not initialized (size==0)");
+
+    const size_t MAX_BATCH_BLOCKS = comp_pool.size();                   // capacity of our scratch
+    const size_t MAX_BATCH_BYTES  = MAX_BATCH_BLOCKS * BGZF_BLOCK_SIZE; // decompressed upper-bound per batch
+
     size_t want  = ulen;
     size_t total = 0;
 
     while (want > 0) {
-        // 1) Serve from stash first
+        // ---- 1) serve from stash if any available ----
         const size_t avail = (stash_pos_ < stash_.size()) ? (stash_.size() - stash_pos_) : 0;
         if (avail) {
             const size_t n = std::min(want, avail);
@@ -110,58 +119,57 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             continue;
         }
 
-        // 2) Need to produce more bytes
-        compact_stash_();                 // drop consumed prefix (retains capacity)
-        if (seen_eof_block_) break;
+        // ---- 2) need to produce more bytes ----
+        compact_stash_();                 // drop consumed prefix, keep capacity
+        if (seen_eof_block_) break;       // nothing more to produce
 
         const size_t stash_room = (stash_cap_ > stash_.size()) ? (stash_cap_ - stash_.size()) : 0;
         if (stash_room == 0) break;
 
-        // Need at least one block, but not beyond free stash capacity
-        const size_t need_bytes = std::min(std::max(want, static_cast<size_t>(BGZF_BLOCK_SIZE)), stash_room);
+        // cover at least one block, at most free stash, and at most one batch capacity
+        const size_t need_bytes = std::min(
+            std::max(want, static_cast<size_t>(BGZF_BLOCK_SIZE)),
+            std::min(stash_room, MAX_BATCH_BYTES)
+        );
 
         // -------- PLAN (do NOT advance comp_off_ here) --------
         struct BlockPlan {
             uint64_t off;         // compressed file offset
             uint32_t comp_size;   // BSIZE + 1
             uint32_t decomp_size; // ISIZE (0 => EOF marker)
-            size_t   dest_off;    // offset (relative to this batch's stash tail)
+            size_t   dest_off;    // offset within this batch's stash tail
         };
 
         std::vector<BlockPlan> plan;
-        plan.reserve((need_bytes + BGZF_BLOCK_SIZE - 1) / BGZF_BLOCK_SIZE);
+        plan.reserve(std::min(MAX_BATCH_BLOCKS, (need_bytes + BGZF_BLOCK_SIZE - 1) / BGZF_BLOCK_SIZE));
 
-        size_t   batch_bytes = 0;   // sum of ISIZE of non-EOF blocks we will append now
+        size_t   batch_bytes = 0;  // sum of ISIZE for non-EOF blocks
         uint64_t off_plan    = comp_off_;
         bool     saw_eof     = false;
+        size_t   planned_cnt = 0;
 
-        while (!saw_eof && batch_bytes < need_bytes) {
+        while (!saw_eof && batch_bytes < need_bytes && planned_cnt < MAX_BATCH_BLOCKS) {
             BGZFBlockInfo info = probe_bgzf_block_size_(off_plan);
-            if (info.comp_size == 0) { // physical EOF (rare)
-                saw_eof = true;
-                break;
-            }
+            if (info.comp_size == 0) { saw_eof = true; break; }
 
             const uint32_t comp_sz   = static_cast<uint32_t>(info.comp_size);
             const uint32_t decomp_sz = static_cast<uint32_t>(info.decomp_size);
 
-            if (decomp_sz == 0) {
-                // EOF marker: no bytes appended, but we must consume this block later
-                plan.push_back(BlockPlan{ off_plan, comp_sz, decomp_sz, /*dest_off*/ batch_bytes });
+            if (decomp_sz == 0) { // EOF marker: no output, but must consume later
+                plan.push_back(BlockPlan{ off_plan, comp_sz, 0u, batch_bytes });
                 off_plan += comp_sz;
                 saw_eof = true;
                 break;
             }
 
-            // Capacity guard BEFORE including the block
-            if (batch_bytes + decomp_sz > stash_room) {
-                break; // would exceed remaining stash capacity
-            }
+            // capacity guards BEFORE including the block
+            if (batch_bytes + decomp_sz > stash_room)   break; // stash cap
+            if (batch_bytes + decomp_sz > MAX_BATCH_BYTES) break; // batch cap
 
-            // Accept the block
-            plan.push_back(BlockPlan{ off_plan, comp_sz, decomp_sz, /*dest_off*/ batch_bytes });
+            plan.push_back(BlockPlan{ off_plan, comp_sz, decomp_sz, batch_bytes });
             off_plan    += comp_sz;
             batch_bytes += decomp_sz;
+            ++planned_cnt;
         }
 
         if (plan.empty()) {
@@ -170,17 +178,18 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             break;
         }
 
-        // Reserve exactly the space we plan to fill with decompressed bytes
+        // Reserve exactly the decompressed space we will fill this round
         const size_t old_size = stash_.size();
         if (old_size + batch_bytes > stash_cap_) {
+            // With guards above this should never happen
             throw std::runtime_error("Planning error: batch would exceed stash capacity");
         }
         stash_.resize(old_size + batch_bytes);
         uint8_t* const stash_base = stash_.data() + old_size;
 
         // -------- READ COMPRESSED (serial) --------
-        // We only need to read data for non-EOF blocks (EOF blocks have no payload to write).
-        std::vector<std::array<uint8_t, BGZF_BLOCK_SIZE>> comp_pool(plan.size());
+        if (plan.size() > MAX_BATCH_BLOCKS)
+            throw std::runtime_error("plan exceeds comp_pool capacity");
         for (size_t i = 0; i < plan.size(); ++i) {
             const auto& j = plan[i];
             const ssize_t rn = ::pread(fd_, comp_pool[i].data(),
@@ -195,36 +204,44 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
 
         tbb::parallel_for(size_t(0), plan.size(), [&](size_t i){
             const auto& j = plan[i];
-            if (j.decomp_size == 0) { // EOF marker: no output
+
+            if (j.decomp_size == 0) { // EOF marker — no output
                 produced[i] = 0;
                 status[i]   = 1;
                 return;
             }
-#ifdef USE_LIBDEFLATE
+
+        #ifdef USE_LIBDEFLATE
             size_t out_n = 0;
-            // (Optional: thread_local decompressor to avoid alloc/free)
-            libdeflate_decompressor* d = libdeflate_alloc_decompressor();
+            // (optional) thread-local decompressor to avoid alloc/free overhead
+            thread_local libdeflate_decompressor* tls_d = []{
+                auto* p = libdeflate_alloc_decompressor();
+                if (!p) std::abort();
+                return p;
+            }();
             auto st = libdeflate_gzip_decompress(
-                d,
+                tls_d,
                 comp_pool[i].data(), j.comp_size,
-                stash_base + j.dest_off, j.decomp_size,  // write to final slice
+                stash_base + j.dest_off, j.decomp_size,
                 &out_n
             );
-            libdeflate_free_decompressor(d);
-            if (st != LIBDEFLATE_SUCCESS) { status[i] = -1; return; }
-#else
+            if (st != LIBDEFLATE_SUCCESS || out_n != j.decomp_size) {
+                status[i] = -1; return;
+            }
+        #else
             z_stream zs{};
             if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) { status[i] = -1; return; }
             zs.next_in   = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(comp_pool[i].data()));
             zs.avail_in  = (uInt)j.comp_size;
             zs.next_out  = reinterpret_cast<Bytef*>(stash_base + j.dest_off);
-            zs.avail_out = (uInt)j.decomp_size; // exact ISIZE as bound
+            zs.avail_out = (uInt)j.decomp_size; // exact ISIZE bound
             const int ret = inflate(&zs, Z_FINISH);
             const size_t out_n = j.decomp_size - zs.avail_out;
             inflateEnd(&zs);
             if (ret != Z_STREAM_END || out_n != j.decomp_size) { status[i] = -1; return; }
-#endif
-            produced[i] = j.decomp_size; // must match exactly
+        #endif
+
+            produced[i] = j.decomp_size;
             status[i]   = 0;
         });
 
@@ -241,7 +258,7 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             }
 
             if (status[i] != 0 || produced[i] != j.decomp_size) {
-                // Roll back any unfilled tail beyond 'appended' and fail fast
+                // Roll back unfilled tail beyond 'appended' and fail fast
                 stash_.resize(old_size + appended);
                 throw std::runtime_error("BGZF decompress failed or ISIZE mismatch (parallel direct-write)");
             }
@@ -250,11 +267,10 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             // Block fully consumed in order; now advance compressed stream offset
             comp_off_ = j.off + j.comp_size;
 
-            // If stash reached cap exactly, stop (remaining planned blocks will be re-planned next time)
-            if (old_size + appended == stash_cap_) break;
+            if (old_size + appended == stash_cap_) break; // stash is full
         }
 
-        // If nothing became available after producing, we're done
+        // After production: if still nothing available, break out
         if (stash_pos_ >= stash_.size()) break;
     }
 
@@ -437,10 +453,6 @@ bool CompressedInputStream::inflate_bgzf_block_(BlockMeta& block) {
     if (rn != static_cast<ssize_t>(block.comp_size)) {
         throw std::runtime_error("Short read on BGZF block");
     }
-    //comp_off_ += block.comp_size.comp_size;
-
-    // Decompress to tmp_decomp_ (resize to max; shrink after)
-    //tmp_decomp_.resize(65536);
 
 #ifdef USE_LIBDEFLATE
         std::size_t out_n = 0;

@@ -104,6 +104,7 @@ private:
     // Temp buffers per block
     std::vector<uint8_t> tmp_comp_;
     std::vector<uint8_t> tmp_decomp_;
+    std::vector<std::array<uint8_t, BGZF_BLOCK_SIZE>> comp_pool;
 
     // Inflaters
     z_stream zstrm_;

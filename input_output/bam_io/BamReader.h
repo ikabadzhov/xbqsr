@@ -15,6 +15,7 @@ class BamReader : public AlignmentReader {
 
     BufferReader buffer;
     std::string_view getslice(size_t numBytesToRead, size_t &numBytesRead);
+    bool header_done_ = false;
 public:
     explicit BamReader(std::unique_ptr<InputStream> inputStream, ssize_t buffSz = DEFAULT_BUFFER_SIZE) : AlignmentReader(std::move(inputStream)),
                                                                                                          buffer(std::min(DEFAULT_BUFFER_SIZE, buffSz)) {
@@ -23,7 +24,7 @@ public:
 
     void ParseHeader(Header& hdr) override;
     void Close() override;
-    ssize_t ParseAlignment(SamAlignments& reads) override;
+    ssize_t ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header) override;
 };
 
 

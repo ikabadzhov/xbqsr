@@ -22,7 +22,7 @@ public:
         buffer(std::min(DEFAULT_BUFFER_SIZE, buffSz)) {}
 
     void ParseHeader(Header& hdr) override;
-    ssize_t ParseAlignment(SamAlignments& reads) override;
+    ssize_t ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header) override;
 
     void Close() override;
 };

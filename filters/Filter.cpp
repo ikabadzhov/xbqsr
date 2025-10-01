@@ -7,17 +7,6 @@ using namespace std;
 
 std::function<bool (SamAlignments&, size_t)> Filter::AddREFID(SamAlignments& reads) {
 
-    /*std::unordered_map<string,int32_t> dictTable;
-
-    dictTable["*"] = -1;
-
-    int32_t index=0;
-
-    for(auto& record:reads.GetHdr().sequenceDictionary.getAll()){
-        dictTable[record.getSequenceName()] = index;
-        index++;
-    }*/
-
     reads.TMP.REFID.resize(reads.GetAlnsNum());
     reads.TMP.nextREFID.resize(reads.GetAlnsNum());
 

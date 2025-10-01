@@ -16,11 +16,9 @@ SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=nvptx64-nvidia-cu
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl")
 
-file(GLOB LIB_SOURCES
-		${CMAKE_CURRENT_SOURCE_DIR}/libdeflate/*.c
-		${CMAKE_CURRENT_SOURCE_DIR}/libdeflate/*/*.c
-)
+
 find_package(ZLIB REQUIRED)
+find_library(LIBDEFLATE_LIBRARY deflate REQUIRED)
 find_package(Boost 1.63.0 COMPONENTS program_options REQUIRED)
 find_package(TBB)
 include_directories( ${Boost_INCLUDE_DIR})
@@ -151,4 +149,4 @@ add_executable(bqsr main.cpp
 		timer/ProfilerIO.h
 )
 
-target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB)
+target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB ${LIBDEFLATE_LIBRARY})

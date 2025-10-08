@@ -10,6 +10,248 @@
 #include "../../logger/Logger.h"
 #include "../../timer/Profiler.h"
 
+// Quality
+template <typename IndexT, typename ValueT>
+inline void aggregate_quality(
+    sycl::queue& q,
+    const IndexT* d_idx, const ValueT* d_val, size_t N,
+    bqsrEntry* d_table, size_t table_bins
+) {
+    //aggregate_dense_atomic(q, d_idx, d_val, N, d_table, table_bins);
+    aggregate_quality_localWG(q, d_idx, d_val, N, d_table, table_bins);
+}
+
+// Cycle
+template <typename IndexT, typename ValueT>
+inline void aggregate_cycle(
+    sycl::queue& q,
+    const IndexT* d_idx, const ValueT* d_val, size_t N,
+    bqsrEntry* d_table, size_t table_bins
+) {
+    aggregate_dense_atomic(q, d_idx, d_val, N, d_table, table_bins);
+    //aggregate_quality_globalWG(q, d_idx, d_val, N, d_table, table_bins);
+}
+
+// Context (sparse index space; still fine with atomics)
+template <typename IndexT, typename ValueT>
+inline void aggregate_context(
+    sycl::queue& q,
+    const IndexT* d_idx, const ValueT* d_val, size_t N,
+    bqsrEntry* d_table, size_t table_bins
+) {
+    aggregate_dense_atomic(q, d_idx, d_val, N, d_table, table_bins);
+}
+
+template <typename IndexT, typename ValueT>
+void aggregate_dense_atomic(
+    sycl::queue& q,
+    const IndexT* d_indexes,     // size N
+    const ValueT* d_vals,        // size N (err flags or counts)
+    size_t N,
+    bqsrEntry* d_table,         // size = table_bins
+    size_t table_bins            // for optional bounds check
+) {
+    const size_t wg = 256;                         // good default
+    const size_t g  = div_up(std::max<size_t>(N, wg), wg) * wg;
+
+    q.submit([&](sycl::handler& cgh){
+        cgh.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(g), sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> it) {
+                const size_t stride = it.get_global_range(0);
+                size_t i = it.get_global_id(0);
+                for (; i < N; i += stride) {
+                    IndexT idx = d_indexes[i];
+                    if (idx < 0) continue;          // skip invalid
+                    if (static_cast<size_t>(idx) >= table_bins) continue; // guard
+
+                    // Relaxed atomics are fine here.
+                    auto obs_ref = sycl::atomic_ref<int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[idx].Observations);
+
+                    auto mis_ref = sycl::atomic_ref<int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[idx].Mismatches);
+
+                    mis_ref.fetch_add(static_cast<int64_t>(d_vals[i]));
+                    obs_ref.fetch_add(1);
+
+                }
+            }
+        );
+    });
+}
+
+// N.B. d_idx in [0,93] or -1 for "invalid"; d_val is the error (0/1 or any int to add).
+// d_table has exactly 94 entries and is already zeroed (or you intend to accumulate into it).
+inline void aggregate_quality_localWG(
+    sycl::queue& q,
+    const int32_t* d_idx,           // [N]
+    const int32_t* d_val,           // [N]
+    size_t N,
+    bqsrEntry* d_table,
+    size_t table_size// [94]
+) {
+    const size_t wg = 256; // good default; tune if needed
+    // make global size a multiple of wg and >= N (via grid-stride loop)
+    const size_t g  = ((std::max(N, wg) + wg - 1) / wg) * wg;
+
+    q.submit([&](sycl::handler& cgh) {
+        // local histograms (Observations and Mismatches)
+        sycl::local_accessor<int32_t, 1> local_obs (sycl::range<1>(table_size), cgh);
+        sycl::local_accessor<int32_t, 1> local_mis (sycl::range<1>(table_size), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(g), sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> it) {
+                const int  lid    = it.get_local_id(0);
+                const int  lsize  = it.get_local_range(0);
+                const size_t gsize = it.get_global_range(0);
+                size_t i = it.get_global_id(0);
+
+                // --- Zero local histograms in parallel
+                for (int b = lid; b < table_size; b += lsize) {
+                    local_obs[b] = 0;
+                    local_mis[b] = 0;
+                }
+                it.barrier(sycl::access::fence_space::local_space);
+
+                // --- Grid-stride loop over all elements
+                for (; i < N; i += gsize) {
+                    const int idx = d_idx[i];
+                    if ((unsigned)idx < (unsigned)table_size) {
+                        // local-space relaxed atomics to reduce bank conflicts
+                        auto a_obs = sycl::atomic_ref<
+                            int32_t,
+                            sycl::memory_order::relaxed,
+                            sycl::memory_scope::work_group,
+                            sycl::access::address_space::local_space>(local_obs[idx]);
+                        auto a_mis = sycl::atomic_ref<
+                            int32_t,
+                            sycl::memory_order::relaxed,
+                            sycl::memory_scope::work_group,
+                            sycl::access::address_space::local_space>(local_mis[idx]);
+                        a_mis.fetch_add(d_val[i]);
+                        a_obs.fetch_add(1);
+                    }
+                }
+
+                it.barrier(sycl::access::fence_space::local_space);
+
+                // --- Flush: first BINS threads (or strided) push to global with one atomic each
+                for (int b = lid; b < table_size; b += lsize) {
+                    const int obs = local_obs[b];
+                    const int mis = local_mis[b];
+                    if (obs == 0 && mis == 0) continue;
+
+                    // Atomics on global table entries
+                    auto g_obs = sycl::atomic_ref<
+                        int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[b].Observations);
+                    auto g_mis = sycl::atomic_ref<
+                        int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[b].Mismatches);
+                        g_obs.fetch_add(obs);
+                        g_mis.fetch_add(mis);
+                }
+            }
+        );
+    });
+}
+
+inline void aggregate_quality_globalWG(
+    sycl::queue& q,
+    const int32_t* d_idx,           // [N]
+    const int32_t* d_val,           // [N]
+    size_t N,
+    bqsrEntry* d_table,
+    size_t table_size // [94]
+) {
+    const size_t wg = 256; // good default; tune if needed
+    // make global size a multiple of wg and >= N (via grid-stride loop)
+    const size_t g  = ((std::max(N, wg) + wg - 1) / wg) * wg;
+    mem_t<int32_t> obs(g*table_size, q);
+    mem_t<int32_t> mis(g*table_size, q);
+    auto* local_obs = obs.data();
+    auto* local_mis = mis.data();
+
+    q.submit([&](sycl::handler& cgh) {
+        // local histograms (Observations and Mismatches)
+        //sycl::local_accessor<int32_t, 1> local_obs (sycl::range<1>(table_size), cgh);
+        //sycl::local_accessor<int32_t, 1> local_mis (sycl::range<1>(table_size), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(g), sycl::range<1>(wg)),
+            [=](sycl::nd_item<1> it) {
+                const int  lid    = it.get_local_id(0);
+                const int  lsize  = it.get_local_range(0);
+                const size_t gsize = it.get_global_range(0);
+                size_t i = it.get_global_id(0);
+                const size_t group  = it.get_group(0);
+
+                const size_t base = group * table_size; // this WG's private histogram
+
+                // --- Zero local histograms in parallel
+                for (int b = lid; b < table_size; b += lsize) {
+                    local_obs[base + b] = 0;
+                    local_mis[base + b] = 0;
+                }
+                it.barrier(sycl::access::fence_space::local_space);
+
+                // --- Grid-stride loop over all elements
+                for (; i < N; i += gsize) {
+                    const int idx = d_idx[i];
+                    if ((unsigned)idx < (unsigned)table_size) {
+                        // local-space relaxed atomics to reduce bank conflicts
+                        auto a_obs = sycl::atomic_ref<
+                            int32_t,
+                            sycl::memory_order::relaxed,
+                            sycl::memory_scope::work_group,
+                            sycl::access::address_space::global_space>(local_obs[base + idx]);
+                        auto a_mis = sycl::atomic_ref<
+                            int32_t,
+                            sycl::memory_order::relaxed,
+                            sycl::memory_scope::work_group,
+                            sycl::access::address_space::global_space>(local_mis[base + idx]);
+                        a_mis.fetch_add(d_val[i]);
+                        a_obs.fetch_add(1);
+                    }
+                }
+
+                it.barrier(sycl::access::fence_space::local_space);
+
+                // --- Flush: first BINS threads (or strided) push to global with one atomic each
+                for (int b = lid; b < table_size; b += lsize) {
+                    const int obs = local_obs[base + b];
+                    const int mis = local_mis[base + b];
+                    if (obs == 0 && mis == 0) continue;
+
+                    // Atomics on global table entries
+                    auto g_obs = sycl::atomic_ref<
+                        int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[b].Observations);
+                    auto g_mis = sycl::atomic_ref<
+                        int64_t,
+                        sycl::memory_order::relaxed,
+                        sycl::memory_scope::device,
+                        sycl::access::address_space::global_space>(d_table[b].Mismatches);
+                        g_obs.fetch_add(obs);
+                        g_mis.fetch_add(mis);
+                }
+            }
+        );
+    });
+}
+
 //[[clang::optnone]]
 void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>> batch) {
     if (batch->_n <= 0) {
@@ -59,14 +301,11 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     auto d_cycle_table = batch->_d_data.d_cycle_table;
     auto d_context_table = batch->_d_data.d_context_table;
 
+    auto d_quality_table_sz = batch->_d_data.d_quality_table_sz;
+    auto d_cycle_table_sz = batch->_d_data.d_cycle_table_sz;
+    auto d_context_table_sz = batch->_d_data.d_context_table_sz;
 
-    auto d_temporary_keys = batch->_d_data.d_temporary_keys;
-    auto d_temporary_vals = batch->_d_data.d_temporary_vals;
     auto d_temporary_segments_sequences_offsets = batch->_d_data.d_temporary_segments_sequences_offsets;
-
-    auto d_read_index = batch->_d_data.d_read_index;
-    auto d_i_offset = batch->_d_data.d_i_offset;
-    auto d_j_offset = batch->_d_data.d_j_offset;
 
     size_t offset_sequences = batch->_d_data.d_sequence_span_offset;
     size_t offset_cigar = batch->_d_data.d_cigar_span_offset;
@@ -157,9 +396,6 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "        [ComputeSkipSliceVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
     profile.stop(StageId::ComputeSkipVector);
-    //  cigar :                 || 14I  13I  9I   2D   10I  3I  ||  6I   9I   1M   8I ||  12D  13M  3D   3I   8I ||  15M  13M  15M ||
-    //  cigars_op_segments :    || 0    14   27   36   38   48      51   57   66   67     75 ...
-    //  i_offset :              || 14   27   36   36   46   49      55   64 ....
 
     profile.start(StageId::ComputeSNPSVector);
     t2.reset();
@@ -210,6 +446,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateVectors kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     profile.start(StageId::UpdateIndexes);
+    profile.start(StageId::Preprocessing);
 
     t.reset();
     {
@@ -274,6 +511,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     Logger::getLogger().log(LOG_DEBUG, "    [CopyingSequencesOffsets kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     t.reset();
+    profile.stop(StageId::Preprocessing);
+    profile.start(StageId::EmitIndexes);
 
        {
         enum { nt = 128, vt = 7, vt0 = 5, nv = nt*vt };
@@ -320,7 +559,6 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
 
                         auto [cycleFactor, cycleIncrement] = prepareCycleCovariates(d_sequences_ptr[idx].len, d_flag[idx]);
 
-                        //for (size_t i = 0; i < l; i++) {
                         if (i >= l) {
                             return;
                         }
@@ -373,153 +611,30 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateTableIndexes kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-    t.reset();
-    const size_t batch_size = 2000000000;
-    size_t total = batch->_d_data.table_sz;
-    for (size_t offset = 0; offset < total; offset += batch_size) {
-        //size_t current_size = min(batch_size, total - offset);
+    profile.stop(StageId::EmitIndexes);
 
-        /**
-         * Quality
-         */
-        mergesort_developer_version(d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz, less_t<key_t>(),
-                  batch->_q_process, d_temporary_keys, d_temporary_vals);
-        // [k1, 0] [k1, 2] [k1, 0] [k1, 3] [k2, 0] [k2, 6] [k2, 1]
-        // [k1, 5], [k2, 7] ...
-        Logger::getLogger().log(LOG_DEBUG, "    [Mergesort] Time: " + std::to_string(t.elapsed()) + " sec");
+    profile.start(StageId::AggregateQual);
+    aggregate_quality(batch->_q_process,
+                  d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz,
+                  d_quality_table, d_quality_table_sz);
+    batch->_q_process.wait_and_throw();
+    profile.stop(StageId::AggregateQual);
 
-        int32_t num_segments_quality = 0;
-        int32_t num_segments_cycle = 0;
-        int32_t num_segments_context = 0;
-        t.reset();
+    profile.start(StageId::AggregateCycle);
+    aggregate_cycle(batch->_q_process,
+                    d_cycle_table_indexes, d_cycle_table_vals, batch->_d_data.table_sz,
+                    d_cycle_table, d_cycle_table_sz);
+    batch->_q_process.wait_and_throw();
+    profile.stop(StageId::AggregateCycle);
 
-        reduce_by_key_preprocessing(d_quality_table_indexes, batch->_d_data.table_sz, d_segments_quality,
-                                    d_temporary_keys, num_segments_quality, plus_t<key_t>(), equal_to_t<key_t>(),
-                                    val_t(0), batch->_q_process);
+    profile.start(StageId::AggregateContext);
+    aggregate_context(batch->_q_process,
+                      d_context_table_indexes, d_context_table_vals, batch->_d_data.table_sz,
+                      d_context_table, d_context_table_sz);
 
-        Logger::getLogger().log(LOG_DEBUG,
-                                "    [Reduce by Key Preprocessing] Time: " + std::to_string(t.elapsed()) + " sec");
+    batch->_q_process.wait_and_throw();
+    profile.stop(StageId::AggregateContext);
 
-        t.reset();
-
-        segreduce(d_quality_table_vals, batch->_d_data.table_sz, d_segments_quality, num_segments_quality,
-                  d_quality_table_vals, plus_t<val_t>(), 0, batch->_q_process);
-
-        Logger::getLogger().log(LOG_DEBUG, "    [Segreduce] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        if (num_segments_quality > 1) {
-
-            batch->_q_process.parallel_for(sycl::range<1>(num_segments_quality - 1), [=](sycl::id<1> segment_idx) {
-
-                int32_t covariate_idx = d_temporary_keys[segment_idx];
-                int32_t err_val = d_quality_table_vals[segment_idx];
-                int32_t segment_sz = d_segments_quality[segment_idx + 1] - d_segments_quality[segment_idx];
-
-                if (covariate_idx == INVALID_INDEX) {
-                    return;
-                }
-                if (d_quality_table[covariate_idx].Observations == -1) {
-                    d_quality_table[covariate_idx].Observations = 0;
-                }
-                d_quality_table[covariate_idx].Mismatches += err_val;
-                d_quality_table[covariate_idx].Observations += segment_sz;
-            });
-        }
-        batch->_q_process.wait_and_throw();
-
-        /**
-         * Cycle
-         */
-        t.reset();
-
-        mergesort_developer_version(d_cycle_table_indexes, d_cycle_table_vals, batch->_d_data.table_sz, less_t<key_t>(),
-                                    batch->_q_process, d_temporary_keys, d_temporary_vals);
-
-        Logger::getLogger().log(LOG_DEBUG, "    [Mergesort] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
-
-        reduce_by_key_preprocessing(d_cycle_table_indexes, batch->_d_data.table_sz, d_segments_cycle,
-                                    d_temporary_keys, num_segments_cycle, plus_t<key_t>(), equal_to_t<key_t>(),
-                                    val_t(0), batch->_q_process);
-
-        Logger::getLogger().log(LOG_DEBUG,
-                                "    [Reduce by Key Preprocessing] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
-
-        segreduce(d_cycle_table_vals, batch->_d_data.table_sz, d_segments_cycle, num_segments_cycle, d_cycle_table_vals,
-                  plus_t<val_t>(), 0, batch->_q_process);
-
-        Logger::getLogger().log(LOG_DEBUG, "    [Segreduce] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        if (num_segments_cycle > 1) {
-            batch->_q_process.parallel_for(sycl::range<1>(num_segments_cycle - 1), [=](sycl::id<1> segment_idx) {
-
-                int32_t covariate_idx = d_temporary_keys[segment_idx];
-                int32_t err_val = d_cycle_table_vals[segment_idx];
-                int32_t segment_sz = d_segments_cycle[segment_idx + 1] - d_segments_cycle[segment_idx];
-
-                if (covariate_idx == INVALID_INDEX) {
-                    return;
-                }
-                if (d_cycle_table[covariate_idx].Observations == -1) {
-                    d_cycle_table[covariate_idx].Observations = 0;
-                }
-                d_cycle_table[covariate_idx].Mismatches += err_val;
-                d_cycle_table[covariate_idx].Observations += segment_sz;
-            });
-        }
-        batch->_q_process.wait_and_throw();
-
-        /**
-        * Context
-        */
-        t.reset();
-
-        mergesort_developer_version(d_context_table_indexes, d_context_table_vals, batch->_d_data.table_sz, less_t<key_t>(),
-                                    batch->_q_process, d_temporary_keys, d_temporary_vals);
-
-        Logger::getLogger().log(LOG_DEBUG, "    [Mergesort] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
-        reduce_by_key_preprocessing(d_context_table_indexes, batch->_d_data.table_sz, d_segments_context,
-                                    d_temporary_keys, num_segments_context,
-                                    plus_t<key_t>(), equal_to_t<key_t>(), val_t(0), batch->_q_process);
-
-        Logger::getLogger().log(LOG_DEBUG,
-                                "    [Reduce by Key Preprocessing] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
-        segreduce(d_context_table_vals, batch->_d_data.table_sz, d_segments_context, num_segments_context,
-                  d_context_table_vals, plus_t<val_t>(), 0, batch->_q_process);
-
-        batch->_q_process.wait_and_throw();
-
-        Logger::getLogger().log(LOG_DEBUG, "    [Segreduce] Time: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
-
-        if (num_segments_context > 1) {
-
-            batch->_q_process.parallel_for(sycl::range<1>(num_segments_context - 1), [=](sycl::id<1> segment_idx) {
-
-                int32_t covariate_idx = d_temporary_keys[segment_idx];
-                int32_t err_val = d_context_table_vals[segment_idx];
-                int32_t segment_sz = d_segments_context[segment_idx + 1] - d_segments_context[segment_idx];
-
-                if (covariate_idx == INVALID_INDEX) {
-                    return;
-                }
-                if (d_context_table[covariate_idx].Observations == -1) {
-                    d_context_table[covariate_idx].Observations = 0;
-                }
-                d_context_table[covariate_idx].Mismatches += err_val;
-                d_context_table[covariate_idx].Observations += segment_sz;
-            });
-        }
-        batch->_q_process.wait_and_throw();
-    }
     Logger::getLogger().log(LOG_DEBUG, "    [Tables updates] Time: " + std::to_string(t.elapsed()) + " sec");
     profile.stop(StageId::UpdateIndexes);
 }

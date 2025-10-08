@@ -379,11 +379,9 @@ void hardClip(std::vector<CigarOperation>& cigar, char* SEQ, SpanField& sequence
         copyStart = sequencePtrs.start + stop + 1;
     }
 
-    //SEQ.SliceInPlace(copyStart, copyStart + newLength);
     sequencePtrs.start = copyStart;
     sequencePtrs.len = newLength;
 
-    //QUAL = QUAL.substr(copyStart, newLength);
     qualPtrs = SpanField(copyStart, newLength);
     auto tmp_cigar = cigar;
     cigar = clippedCigar;

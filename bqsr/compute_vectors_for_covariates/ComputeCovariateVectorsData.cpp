@@ -8,7 +8,7 @@
 static size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelData& kernel_data, size_t start_idx, size_t n_elements);
 
 
-SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
+SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
         h_known_sites = known_sites.data();
         h_known_sites_ptr = known_sites_ptr.data();
         h_known_sites_ptr_sz = known_sites_ptr.size();
@@ -19,6 +19,10 @@ SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong
         s_quality_table = quality_table;
         s_cycle_table = cycle_table;
         s_context_table = context_table;
+
+        s_quality_table_sz = quality_table_sz;
+        s_cycle_table_sz = cycle_table_sz;
+        s_context_table_sz = context_table_sz;
 
         h_sequences = sequence;
         h_sequences_ptr = sequence_ptr;
@@ -169,6 +173,11 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
             dest.d_sz_qual_score_cov = src.h_sz_qual_score_cov;
             dest.d_sz_cycle_cov = src.h_sz_cycle_cov;
             dest.d_sz_context_cov = src.h_sz_context_cov;
+
+            dest.d_quality_table_sz = src.s_quality_table_sz;
+            dest.d_cycle_table_sz = src.s_cycle_table_sz;
+            dest.d_context_table_sz = src.s_context_table_sz;
+
             dest.is_first_copy = false;
             transfer_queue.wait();
         }
@@ -551,19 +560,6 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                 size_t segments_size = sizeof(dest.d_segments_context[0]) * chunk_sz;
                 offset += segments_size;
             }
-            // 28. Allocate d_temporary_keys, capped at 2 BILLIONS
-            {
-                size_t alignment = alignof(decltype(dest.d_temporary_keys[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_temporary_keys = reinterpret_cast<segment_t *>(base + offset);
-                size_t tmp_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                                      src.h_sequences_ptr[src_offset].start;
-                chunk_sz = std::min(tmp_chunk_sz, syclgal_mergesort::MAX_NUM_ELEMENTS);
-                size_t segments_size = sizeof(dest.d_temporary_keys[0]) * chunk_sz;
-                offset += segments_size;
-            }
             // 28. Allocate d_temporary_segments_offsets, capped at 2 BILLIONS
             {
                 size_t alignment = alignof(decltype(dest.d_temporary_segments_sequences_offsets[0]));
@@ -575,20 +571,9 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                 size_t segments_size = sizeof(dest.d_temporary_segments_sequences_offsets[0]) * chunk_sz;
                 offset += segments_size;
             }
-            // 28. Allocate d_temporary_vals, capped at 2 BILLIONS
-            {
-                size_t alignment = alignof(decltype(dest.d_temporary_vals[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_temporary_vals = reinterpret_cast<segment_t *>(base + offset);
-                size_t tmp_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                chunk_sz = std::min(tmp_chunk_sz, syclgal_mergesort::MAX_NUM_ELEMENTS);
-                size_t segments_size = sizeof(dest.d_temporary_vals[0]) * chunk_sz;
-                offset += segments_size;
-            }
-            dest.table_sz = chunk_sz;
+            dest.table_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                        src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                       src.h_sequences_ptr[src_offset].start;
 
             // other temporary arrays
             {
@@ -1098,29 +1083,6 @@ size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelDa
                     in.h_sequences_ptr[start_idx + n_elements - 1].len) -
                    in.h_sequences_ptr[start_idx].start;
         size_t segments_size = sizeof(kernel_data.d_segments_context[0]) * chunk_sz;
-        offset += segments_size;
-    }
-
-    // add the memory for the temporary buffer keys in sorting
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_temporary_keys[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t segments_size = sizeof(kernel_data.d_temporary_keys[0]) * chunk_sz;
-        offset += segments_size;
-    }
-    // add the memory for the temporary buffer keys in sorting
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_temporary_vals[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t segments_size = sizeof(kernel_data.d_temporary_vals[0]) * chunk_sz;
         offset += segments_size;
     }
 

@@ -385,7 +385,7 @@ std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
 void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle) {
     Timer timerAll;
     if (reads.GetAlnsNum()==0) return;
-    //auto& profiler = ProfilerBQSR::instance();
+    auto& profiler = ProfilerBQSR::instance();
     timerAll.reset();
     Timer t;
 
@@ -393,17 +393,23 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
 
     int32_t maxIdx = reads.GetAlnsNum();
     auto& hdr = reads.GetHdr();
-    reads.TMP.reads_group_covariate_.Resize(maxIdx);
 
+    profiler.start(StageId::AddReadGroup);
+
+    reads.TMP.reads_group_covariate_.Resize(maxIdx);
     tbb::parallel_for(0, maxIdx, [&](size_t idx) {
         reads.TMP.reads_group_covariate_.Set(idx, readGroupCovariate(hdr, reads, idx));
     });
+
+    profiler.stop(StageId::AddReadGroup);
 
     //std::vector<char> clippedSequences(reads.SEQ.Data(), reads.SEQ.Data() + reads.SEQ.size());
     //std::vector<SpanField> clippedSequencesPtrs(reads.SEQ.Ptrs().begin(), reads.SEQ.Ptrs().end());
 
     //std::string clippedQualities(reads.QUAL.Data(), reads.QUAL.Data() + reads.QUAL.size());
     //std::vector<SpanField> clippedQualitiesPtrs(reads.QUAL.Ptrs().begin(), reads.QUAL.Ptrs().end());
+
+    profiler.start(StageId::Transform);
 
     std::vector<int64_t> pos(reads.POS.begin(), reads.POS.end());
 
@@ -432,7 +438,7 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     size_t work_sz = (reads.GetAlnsNum() + max_thread - 1) / max_thread;
 
     t.reset();
-    //profiler.start(StageId::Transform);
+
     std::vector<std::vector<std::vector<CigarOperation>>> local_clipped_cigar(max_thread, std::vector<std::vector<CigarOperation>>(work_sz));
     std::vector<std::vector<SpanField>> local_clipped_cigar_ptrs(max_thread);
 
@@ -506,17 +512,19 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     size_t total_sequences = reads.GetAlnsNum();
     size_t batch_size = reads.GetAlnsNum();
 
-    t.reset();
-    //profiler.stop(StageId::Transform);
+    profiler.stop(StageId::Transform);
 
+    profiler.start(StageId::RecalibrateBatches);
+
+    t.reset();
     // Update the SequencesInput instance to process only the current batch.
     SequencesInput in(local_known_intervals, local_known_intervals_ptrs,
                       fasta, fasta_ptrs,
-                      tables_quality.data(), tables_cycle.data(), tables_context.data(),
+                      tables_quality.data(), tables_cycle.data(), tables_context.data(), tables_quality.size(), tables_cycle.size(), tables_context.size(),
                       recalibration_tables.szQualScore, recalibration_tables.szCycleCov, recalibration_tables.szContextCov,
-                      clippedSequences,    // correct flat offset
-                      clippedSequencesPtrs,                 // pointer array remains sliced at batch start
-                      clippedQualities,      // adjust using pointer array
+                      clippedSequences,
+                      clippedSequencesPtrs,
+                      clippedQualities,
                       clippedQualitiesPtrs,
                       clipped_cigar_flat.data(),
                       clipped_cigar_flat_start.data(),
@@ -547,15 +555,10 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     q.wait();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 
-
-    t.reset();
-    //memcpy(recalibration_tables.QualityScores.table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.QualityScores.size());
-    //memcpy(recalibration_tables.Cycles.table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.Cycles.size());
-    //memcpy(recalibration_tables.Contexts.table.data(), tables_context.data(), sizeof(bqsrEntry)*recalibration_tables.Contexts.size());
-    Logger::getLogger().log(LOG_INFO, "Time to store table back in the host: " + std::to_string(t.elapsed()));
+    profiler.stop(StageId::RecalibrateBatches);
 
     Logger::getLogger().log(LOG_INFO, "Total time recalibrate: " + std::to_string(timerAll.elapsed()) + "sec");
-    //profiler.report();
+    profiler.report();
 }
 
 BaseRecalibrator::BaseRecalibrator(MappedFasta &fastaMap, vector<std::string> &knownSites,
@@ -642,8 +645,7 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &fastaMap, vector<std::string> &k
 
 
     bqsrEntry defaultEntry;
-    defaultEntry.EmpiricalQuality = 0;
-    defaultEntry.Observations = -1;
+    defaultEntry.Observations = 0;
     defaultEntry.Mismatches = 0;
 
     q.fill(tables_quality.data(), defaultEntry, recalibration_tables.QualityScores.size());
@@ -653,6 +655,7 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &fastaMap, vector<std::string> &k
     Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
 }
 
+//[[clang::optnone]]
 void BaseRecalibrator::getTables(BaseRecalibratorTables &recalibration_tables) {
     memcpy(recalibration_tables.QualityScores.table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.QualityScores.size());
     memcpy(recalibration_tables.Cycles.table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.Cycles.size());
@@ -662,7 +665,7 @@ void BaseRecalibrator::getTables(BaseRecalibratorTables &recalibration_tables) {
 void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, std::vector<combinedBqsrEntry>& table) {
 
     for (size_t idx = 0; idx < bqsrTable.table.size(); idx++) {
-        if (bqsrTable.table[idx].Observations >= 0) {
+        if (bqsrTable.table[idx].Observations > 0) {
             auto key = idxToQualityScoresKey(idx);
             auto entry = bqsrTable.table[idx];
 
@@ -680,7 +683,7 @@ void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, s
         }
     }
     for (auto& tableEntry : table) {
-        tableEntry.entry.EmpiricalQuality = tableEntry.entry.calculateEmpiricalQuality(tableEntry.reportedQuality);
+        tableEntry.empiricalQuality = tableEntry.entry.calculateEmpiricalQuality(tableEntry.reportedQuality);
     }
 }
 
@@ -688,23 +691,23 @@ void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, s
 //[[clang::optnone]]
 void BaseRecalibratorTables::FinalizeBQSRTables() {
     for (size_t idx = 0; idx < QualityScores.size(); idx++) {
-        if (QualityScores.table[idx].Observations >= 0) {
+        if (QualityScores.table[idx].Observations > 0) {
             auto key = idxToQualityScoresKey(idx);
-            QualityScores.table[idx].EmpiricalQuality = QualityScores.table[idx].calculateEmpiricalQuality(
+            QualityScores.empirical_qualities[idx] = QualityScores.table[idx].calculateEmpiricalQuality(
                     double(key.Qual));
         }
     }
     for (size_t idx = 0; idx < Contexts.size(); idx++) {
-        if (Contexts.table[idx].Observations >= 0) {
+        if (Contexts.table[idx].Observations > 0) {
             auto key = idxToContextCovKey(idx);
-            Contexts.table[idx].EmpiricalQuality = Contexts.table[idx].calculateEmpiricalQuality(
+            Contexts.empirical_qualities[idx] = Contexts.table[idx].calculateEmpiricalQuality(
                     double(key.Qual));
         }
     }
     for (size_t idx = 0; idx < Cycles.size(); idx++) {
-        if (Cycles.table[idx].Observations >= 0) {
+        if (Cycles.table[idx].Observations > 0) {
             auto key = idxToCycleCovKey(idx);
-            Cycles.table[idx].EmpiricalQuality = Cycles.table[idx].calculateEmpiricalQuality(
+            Cycles.empirical_qualities[idx] = Cycles.table[idx].calculateEmpiricalQuality(
                     double(key.Qual));
         }
     }
@@ -888,7 +891,7 @@ void initializeQuantizedQualityScores(bqsrTable& bqsrTable, int32_t quantLevel, 
 
     for (size_t i = 0; i < bqsrTable.table.size(); i++) {
         if (bqsrTable.table[i].Observations >=0) {
-            quantizationMap[bqsrTable.table[i].EmpiricalQuality] += bqsrTable.table[i].Observations;
+            quantizationMap[bqsrTable.empirical_qualities[i]] += bqsrTable.table[i].Observations;
         }
     }
     auto quantizationIntervals = initializeQuantizationIntervals(quantizationMap);
@@ -929,7 +932,7 @@ double estimateHierarchicalBayesianQuality(double epsilon, combinedBqsrEntry& em
 
     deltaCovariatesQuality += static_cast<double>(empiricalCycleEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
 
-    if (empiricalContextEntry.Observations >= 0) {
+    if (empiricalContextEntry.Observations > 0) {
         deltaCovariatesQuality += static_cast<double>(empiricalContextEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
     }
     return conditionalPrior + deltaCovariatesQuality;
@@ -1144,14 +1147,16 @@ bqsrTableKey BaseRecalibratorTables::idxToContextCovKey(size_t idx) {
 
 BaseRecalibratorTables::BaseRecalibratorTables(size_t nReadGroups, size_t szQual, size_t maxCycle) : szQualScore(szQual), szCycleCov(maxCycle * 2), nReadGroups(nReadGroups), MAX_CYCLE(maxCycle) {
     bqsrEntry defaultEntry;
-    defaultEntry.EmpiricalQuality = 0;
     defaultEntry.Observations = -1;
     defaultEntry.Mismatches = 0;
     szContextCov = MaxContextCovariateKey() + 1;
 
     QualityScores.table.resize(nReadGroups * szQualScore, defaultEntry);
+    QualityScores.empirical_qualities.resize(nReadGroups * szQualScore, 0);
     Cycles.table.resize(nReadGroups * szQualScore * szCycleCov, defaultEntry);
+    Cycles.empirical_qualities.resize(nReadGroups * szQualScore * szCycleCov, 0);
     Contexts.table.resize(nReadGroups * szQualScore * szContextCov, defaultEntry);
+    Contexts.empirical_qualities.resize(nReadGroups * szQualScore * szContextCov, 0);
 }
 
 void BaseRecalibratorTables::PrintTables(Header& samHeader) {
@@ -1180,7 +1185,7 @@ void BaseRecalibratorTables::PrintTables(Header& samHeader) {
             if(this->Cycles.table[idx].Observations!=-1) {
                 bqsrTableKey key = idxToCycleCovKey(idx);
                 cyclesTable << "[" << unsigned(key.Qual) << ", " << key.Covariate << ", " << samHeader.getReadGroupRecord().getString(key.ReadGroup) << "] -> ";
-                cyclesTable << unsigned(this->Cycles.table[idx].EmpiricalQuality) << " "
+                cyclesTable << unsigned(this->Cycles.empirical_qualities[idx]) << " "
                             << this->Cycles.table[idx].Observations << " " << this->Cycles.table[idx].Mismatches
                             << std::endl;
             }
@@ -1193,7 +1198,7 @@ void BaseRecalibratorTables::PrintTables(Header& samHeader) {
             if(this->Contexts.table[idx].Observations!=-1) {
                 bqsrTableKey key = idxToContextCovKey(idx);
                 contextTable << "[" << unsigned(key.Qual) << ", " << key.Covariate << ", " << samHeader.getReadGroupRecord().getString(key.ReadGroup) << "] -> ";
-                contextTable << unsigned(this->Contexts.table[idx].EmpiricalQuality) << " "
+                contextTable << unsigned(this->Contexts.empirical_qualities[idx]) << " "
                              << this->Contexts.table[idx].Observations << " " << this->Contexts.table[idx].Mismatches
                              << std::endl;
             }
@@ -1299,10 +1304,11 @@ void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, Compress
 
     for (size_t i = 0; i < table.size(); i++) {
         auto& entry = table[i].entry;
+        auto& empiricalQuality = table[i].empiricalQuality;
         auto key = this->idxToQualityScoresKey(i);
         readGroups.push_back(key.ReadGroup);
         maxLenReadGroup = std::max(maxLenReadGroup, hdr.getReadGroupRecord().getString(key.ReadGroup).size());
-        maxLenEmpiricalQuality = std::max(maxLenEmpiricalQuality, std::to_string(entry.EmpiricalQuality).size() + 5);
+        maxLenEmpiricalQuality = std::max(maxLenEmpiricalQuality, std::to_string(empiricalQuality).size() + 5);
         maxLenEstimatedQReported = std::max(maxLenEstimatedQReported, std::to_string(table[i].reportedQuality).size());
         maxLenObservations = std::max(maxLenObservations, std::to_string(entry.Observations).size());
         maxLenErrors = std::max(maxLenErrors, std::to_string(entry.Mismatches).size() + 3);
@@ -1321,10 +1327,11 @@ void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, Compress
 
     for ( auto &rg : readGroups) {
         auto& combinedEntry = table[rg];
+        auto& empiricalQuality = table[rg].empiricalQuality;
         auto& entry = table[rg].entry;
         file << std::left << std::setw(static_cast<int32_t>(maxLenReadGroup)) << hdr.getReadGroupRecord().getString(rg)
              << "  " << std::left << std::setw(static_cast<int32_t>(maxLenEventType)) << "M"
-             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << (int)entry.EmpiricalQuality << ".0000"
+             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << (int)empiricalQuality << ".0000"
              << "  " << std::fixed << std::setprecision(4) << std::right << std::setw(static_cast<int32_t>(maxLenEstimatedQReported)) << combinedEntry.reportedQuality
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenObservations)) << entry.Observations
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenErrors) - 3) << entry.Mismatches << ".00\n";
@@ -1346,14 +1353,15 @@ void BaseRecalibratorTables::printBQSRTable(std::ofstream& file, Header &hdr) {
     std::vector<bqsrTableKey> keys;
 
     for (size_t i = 0; i < QualityScores.table.size(); i++) {
-        if (QualityScores.table[i].Observations >= 0) {
+        if (QualityScores.table[i].Observations > 0) {
             auto key = this->idxToQualityScoresKey(i);
             auto &entry = QualityScores.table[i];
+            auto &empiricalQuality = QualityScores.empirical_qualities[i];
             keys.push_back(key);
             maxLenReadGroup = std::max(maxLenReadGroup, hdr.getReadGroupRecord().getString(key.ReadGroup).size());
             maxLenQualityScore = std::max(maxLenQualityScore, std::to_string(key.Qual).size());
             maxLenEmpiricalQuality = std::max(maxLenEmpiricalQuality,
-                                              std::to_string(entry.EmpiricalQuality).size() + 5);
+                                              std::to_string(empiricalQuality).size() + 5);
             maxLenObservations = std::max(maxLenObservations, std::to_string(entry.Observations).size());
             maxLenErrors = std::max(maxLenErrors, std::to_string(entry.Mismatches).size() + 3);
             szQualityTable++;
@@ -1378,10 +1386,11 @@ void BaseRecalibratorTables::printBQSRTable(std::ofstream& file, Header &hdr) {
 
     for (auto &key : keys) {
         auto& entry = QualityScores.table[getQualityScoresIdx(key, szQualScore)];
+        auto& empiricalQuality = QualityScores.empirical_qualities[getQualityScoresIdx(key, szQualScore)];
         file << std::left << std::setw(static_cast<int32_t>(maxLenReadGroup)) << hdr.getReadGroupRecord().getString(key.ReadGroup)
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenQualityScore)) << (int)key.Qual
              << "  " << std::left << std::setw(static_cast<int32_t>(maxLenEventType)) << "M"
-             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << (int)entry.EmpiricalQuality << ".0000"
+             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << (int)empiricalQuality << ".0000"
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenObservations)) << entry.Observations
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenErrors) - 3) << entry.Mismatches << ".00\n";
     }
@@ -1404,9 +1413,10 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
     std::vector<covariateBqsrTableKey> keys;
 
     for (size_t i = 0; i < Cycles.size(); i++) {
-        if (Cycles.table[i].Observations >= 0) {
+        if (Cycles.table[i].Observations > 0) {
             auto key = this->idxToCycleCovKey(i);
             auto entry = Cycles.table[i];
+            auto empiricalQuality = Cycles.empirical_qualities[i];
             int32_t sign = (key.Covariate & 0x1);
             int32_t realCycle = (sign==0) ? (key.Covariate>>1) : (-1)*(key.Covariate>>1);
             std::string cycleText = std::to_string(realCycle);
@@ -1415,7 +1425,7 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
             maxLenQualityScore = std::max(maxLenQualityScore, std::to_string(key.Qual).size());
             maxLenCovariateValue = std::max(maxLenCovariateValue, cycleText.size());
             maxLenEmpiricalQuality = std::max(maxLenEmpiricalQuality,
-                                              std::to_string(entry.EmpiricalQuality).size() + 5);
+                                              std::to_string(empiricalQuality).size() + 5);
             maxLenObservations = std::max(maxLenObservations, std::to_string(entry.Observations).size());
             maxLenErrors = std::max(maxLenErrors, std::to_string(entry.Mismatches).size() + 3);
             szCycleTable++;
@@ -1423,16 +1433,18 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
     }
 
     for (size_t i = 0; i < Contexts.size(); i++) {
-        if (Contexts.table[i].Observations >= 0) {
+        if (Contexts.table[i].Observations > 0) {
             auto key = this->idxToContextCovKey(i);
             auto entry = Contexts.table[i];
+            auto empiricalQuality = Contexts.empirical_qualities[i];
+
             std::string text = keyToString(key.Covariate);
             keys.push_back({false, text, key});
             maxLenReadGroup = std::max(maxLenReadGroup, hdr.getReadGroupRecord().getString(key.ReadGroup).size());
             maxLenQualityScore = std::max(maxLenQualityScore, std::to_string(key.Qual).size());
             maxLenCovariateValue = std::max(maxLenCovariateValue, text.size());
             maxLenEmpiricalQuality = std::max(maxLenEmpiricalQuality,
-                                              std::to_string(entry.EmpiricalQuality).size() + 5);
+                                              std::to_string(empiricalQuality).size() + 5);
             maxLenObservations = std::max(maxLenObservations, std::to_string(entry.Observations).size());
             maxLenErrors = std::max(maxLenErrors, std::to_string(entry.Mismatches).size() + 3);
             szContextTable++;
@@ -1464,12 +1476,15 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
 
     for (auto& key : keys) {
         bqsrEntry entry;
+        uint8_t empiricalQuality;
         std::string name;
         if (key.cycleNotContext) {
             entry = Cycles.table[getCycleCovIdx(key.key, szQualScore, szCycleCov)];
+            empiricalQuality = Cycles.empirical_qualities[getCycleCovIdx(key.key, szQualScore, szCycleCov)];
             name = "Cycle";
         } else {
             entry = Contexts.table[getContextCovIdx(key.key, szQualScore, szCycleCov, szContextCov)];
+            empiricalQuality = Contexts.empirical_qualities[getContextCovIdx(key.key, szQualScore, szCycleCov, szContextCov)];
             name = "Context";
         }
 
@@ -1478,7 +1493,7 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
              << "  " << std::left << std::setw(static_cast<int32_t>(maxLenCovariateValue)) << key.text
              << "  " << std::left << std::setw(static_cast<int32_t>(maxLenCovariateName)) << name
              << "  " << std::left << std::setw(static_cast<int32_t>(maxLenEventType)) << "M"
-             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << static_cast<int>(entry.EmpiricalQuality) << ".0000"
+             << "  " << std::right << std::setw(static_cast<int32_t>(maxLenEmpiricalQuality) - 5) << static_cast<int>(empiricalQuality) << ".0000"
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenObservations)) << entry.Observations
              << "  " << std::right << std::setw(static_cast<int32_t>(maxLenErrors) - 3) << entry.Mismatches << ".00" << "\n";
     }

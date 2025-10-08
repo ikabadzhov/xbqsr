@@ -55,10 +55,14 @@ public:
     int32_t h_sz_context_cov;
 
     bqsrEntry* s_quality_table;
+    size_t s_quality_table_sz;
     bqsrEntry* s_cycle_table;
+    size_t s_cycle_table_sz;
     bqsrEntry* s_context_table;
+    size_t s_context_table_sz;
 
-    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
+
+    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
  };
 
 
@@ -130,8 +134,8 @@ public:
     segment_t* d_segments_cycle = nullptr;
     segment_t* d_segments_context = nullptr;
 
-    key_t* d_temporary_keys = nullptr;
-    val_t* d_temporary_vals = nullptr;
+//    key_t* d_temporary_keys = nullptr;
+//    val_t* d_temporary_vals = nullptr;
     int32_t* d_temporary_segments_sequences_offsets = nullptr;
 
     size_t table_sz = 0;
@@ -140,6 +144,10 @@ public:
     bqsrEntry* d_quality_table = nullptr;
     bqsrEntry* d_cycle_table = nullptr;
     bqsrEntry* d_context_table = nullptr;
+
+    size_t d_quality_table_sz = 0;
+    size_t d_cycle_table_sz = 0;
+    size_t d_context_table_sz = 0;
 
     int32_t* d_read_index = nullptr;
     int32_t* d_i_offset = nullptr;

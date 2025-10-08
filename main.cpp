@@ -153,8 +153,37 @@ int main(int argc, char **argv) {
             echo_command[echo_command.size()-1] = ' ';
         }
     }
+    // Enumerate all GPU devices available
+    auto platforms = sycl::platform::get_platforms();
 
-    sycl::device device(sycl::gpu_selector_v);
+    std::vector<sycl::device> gpus;
+    for (const auto& plat : platforms) {
+        for (const auto& dev : plat.get_devices(sycl::info::device_type::gpu)) {
+            gpus.push_back(dev);
+        }
+    }
+
+    if (gpus.empty()) {
+        std::cerr << "No GPU devices found!\n";
+        return 1;
+    }
+
+    std::cout << "Found " << gpus.size() << " GPU devices:\n";
+    for (size_t i = 0; i < gpus.size(); ++i) {
+        std::cout << "  [" << i << "] "
+                  << gpus[i].get_info<sycl::info::device::name>() << " ("
+                  << gpus[i].get_info<sycl::info::device::vendor>() << ")\n";
+    }
+
+    // Select the second GPU (index 1)
+    size_t selected_idx = 1;  // zero-based index
+    if (selected_idx >= gpus.size()) {
+        std::cerr << "Requested GPU index " << selected_idx
+                  << " but only " << gpus.size() << " GPUs available.\n";
+        return 1;
+    }
+
+    sycl::device device = gpus[1];
 
     sycl::queue q(device);
 

@@ -106,6 +106,10 @@ public:
     void close();
 };
 
+struct DeviceBqsrEntry {
+    int64_t Observations;
+    int64_t Mismatches;
+};
 
 struct applyKey {
     int32_t readGroupCovariate;

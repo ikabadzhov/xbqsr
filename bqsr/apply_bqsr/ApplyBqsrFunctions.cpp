@@ -276,7 +276,7 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
                                 contextKey.ReadGroup = readGrpCov;
                                 contextKey.Qual = qual;
 
-                                bqsrEntry empiricalContextEntry(0,-1,0);
+                                bqsrEntry empiricalContextEntry(-1,0);
 
                                 auto idx3 = static_cast<int32_t>(BaseRecalibratorTables::getContextCovIdx(contextKey, d_sz_qual_score, d_sz_cycle_cov, d_sz_context_cov));
 

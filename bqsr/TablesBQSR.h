@@ -40,11 +40,11 @@ struct bqsrTableKeyHasher
 };
 
 struct bqsrEntry {
-    uint8_t EmpiricalQuality{};
+    //uint8_t EmpiricalQuality{};
     int64_t Observations{};
     int64_t Mismatches{};
 
-    explicit bqsrEntry(uint8_t emp_qual, int64_t observ, int64_t mis) : EmpiricalQuality(emp_qual), Observations(observ), Mismatches(mis) {}
+    explicit bqsrEntry(int64_t observ, int64_t mis) : Observations(observ), Mismatches(mis) {}
     bqsrEntry() = default;
 
     SYCL_EXTERNAL uint8_t calculateEmpiricalQuality(double priorQual);
@@ -52,18 +52,20 @@ struct bqsrEntry {
 
 class bqsrTable {
 public:
-    explicit bqsrTable(size_t sz) : table(sz) {};
+    explicit bqsrTable(size_t sz) : table(sz), empirical_qualities(sz) {};
     bqsrTable() = default;
     SYCL_EXTERNAL static void update(bqsrEntry* table, size_t idx, int64_t errorVal);
     void merge(bqsrTable &other);
 
     std::vector<bqsrEntry> table;
+    std::vector<uint8_t> empirical_qualities;
     size_t size();
 };
 
 struct combinedBqsrEntry {
     double reportedQuality{};
     bqsrEntry entry;
+    uint8_t empiricalQuality;
     bool isValid = false;
 };
 

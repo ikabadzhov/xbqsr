@@ -10,6 +10,8 @@
 enum class StageId : size_t {
     AddReadGroup = 0,
     Transform,
+    CopyCigar,
+    AdaptSequences,
     RecalibrateBatches,
     ComputeSkipVector,
     ComputeSNPSVector,
@@ -26,6 +28,8 @@ enum class StageId : size_t {
 static constexpr std::array<std::string_view, (size_t)StageId::Count> StageNames = {
     "Add Read Group",
     "Transform",
+    "\tCopy Cigar",
+    "\tAdapt Sequences",
     "Recalibrate Batches",
     "\tCompute Skip Vector",
     "\tCompute SNPS Vector",

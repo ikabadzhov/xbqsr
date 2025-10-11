@@ -356,17 +356,6 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                 offset += skip_slice_size;
             }
 
-            // 13. Allocate d_skip_slice_ptr (an array of SpanField)
-            //            {
-            //                size_t alignment = alignof(decltype(dest.d_skip_slice_ptr[0]));
-            //                size_t padding = (alignment - (offset % alignment)) % alignment;
-            //                offset += padding;
-            //                dest.d_skip_slice_ptr = reinterpret_cast<SpanField *>(base + offset);
-            //                size_t skip_slice_ptr_size = sizeof(dest.d_skip_slice_ptr[0]) * n_elements;
-            //                transfer_queue.memcpy(dest.d_skip_slice_ptr, src.h_sequences_ptr + src_offset, skip_slice_ptr_size);
-            //                offset += skip_slice_ptr_size;
-            //            }
-
             // 14. Allocate d_snps
             {
                 size_t alignment = alignof(decltype(dest.d_snps[0]));
@@ -380,16 +369,6 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                 transfer_queue.fill(dest.d_snps, static_cast<int8_t>(0), chunk_sz);
                 offset += snps_size;
             }
-            // 15. Allocate d_snps_ptr (an array of SpanField)
-            //            {
-            //                size_t alignment = alignof(decltype(dest.d_snps_ptr[0]));
-            //                size_t padding = (alignment - (offset % alignment)) % alignment;
-            //                offset += padding;
-            //                dest.d_snps_ptr = reinterpret_cast<SpanField *>(base + offset);
-            //                size_t snps_ptr_size = sizeof(dest.d_snps_ptr[0]) * n_elements;
-            //                transfer_queue.memcpy(dest.d_snps_ptr, src.h_sequences_ptr + src_offset, snps_ptr_size);
-            //                offset += snps_ptr_size;
-            //            }
 
             // 16. Allocate d_stranded_seq (an array of char)
             {
@@ -581,8 +560,9 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                 size_t padding = (alignment - (offset % alignment)) % alignment;
                 offset += padding;
                 dest.d_read_index = reinterpret_cast<int32_t*>(base + offset);
-                chunk_sz = (src.h_cigar_start[src_offset + n_elements - 1] +
-                            src.h_cigar_len[src_offset + n_elements - 1] + 1) - (src.h_cigar_start[src_offset]);
+                // chunk_sz = (src.h_cigar_start[src_offset + n_elements - 1] +
+                   //         src.h_cigar_len[src_offset + n_elements - 1] + 1) - (src.h_cigar_start[src_offset]);
+                chunk_sz = (n_elements + 1);
                 size_t cigar_data_size = sizeof(dest.d_read_index[0]) * chunk_sz;
                 offset += cigar_data_size;
                 dest._n_expanded_cigar_ops = chunk_sz;
@@ -607,7 +587,8 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
 
         }
         if (offset >= dest.max_memory) {
-            exit(-1);
+            Logger::getLogger().log(LOG_ERROR, "hardClipCigar: allocated (", offset, ") exceeds max memory (", dest.max_memory, ")\n");
+            std::abort(); // clean abort with stacktrace (better than exit)
         }
         dest.max_num_elements = bqsr_covariate_vector_kernel::update_batch_num_elements(src, dest, src_offset + n_elements);
         transfer_queue.wait_and_throw();
@@ -1092,7 +1073,7 @@ size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelDa
         size_t padding = (alignment - (offset % alignment)) % alignment;
         offset += padding;
 
-        size_t cigar_data_size = sizeof(kernel_data.d_read_index[0]) * n_elements;
+        size_t cigar_data_size = sizeof(kernel_data.d_read_index[0]) * (n_elements + 1);
         offset += cigar_data_size;
     }
     {

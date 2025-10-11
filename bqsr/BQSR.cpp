@@ -10,9 +10,12 @@
 #include <numeric>
 #include <unordered_map>
 #include <iomanip>
+#include <execution>
 #include <fstream>
+#include <pstl/glue_execution_defs.h>
 #include <tbb/parallel_for.h>
 
+#include "UtilsBQSR.h"
 #include "../Config.h"
 #include "compute_vectors_for_covariates/ComputeCovariateVectorsData.h"
 #include "compute_vectors_for_covariates/ComputeCovariateVectorsFunctions.h"
@@ -380,6 +383,54 @@ std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
     }
 }
 
+// Inputs:
+//   src_cigar : flat CIGAR buffer (CigarOperation[])
+//   src_ptrs  : vector<SpanField> with {start,len} per read
+// Outputs (preallocated):
+//   cigar     : vector<CigarOperation> sized: sum(len) + 8*n_reads
+//   cigar_ptr : vector<SpanField> size n_reads
+
+void parallel_copy_cigar_with_padding(CigarOperation* src_cigar,
+                                      const std::vector<SpanField>& src_ptrs,
+                                      std::vector<CigarOperation>& cigar,
+                                      std::vector<SpanField>& cigar_ptr, size_t PAD)
+{
+    const size_t n_reads = src_ptrs.size();
+    if (n_reads == 0) return;
+
+    // 1) Build per-read sizes with padding (len + PAD).
+    std::vector<size_t> sizes_with_pad(n_reads);
+    tbb::parallel_for (0UL, n_reads, [&](size_t i) {
+        sizes_with_pad[i] = static_cast<size_t>(src_ptrs[i].len) + PAD;
+    });
+
+    // 2) Compute destination starts (exclusive scan).
+    std::vector<size_t> dst_start(n_reads);
+    std::exclusive_scan(std::execution::par, sizes_with_pad.begin(), sizes_with_pad.end(),
+                        dst_start.begin(), size_t{0});
+
+    // Optional sanity: total expected capacity equals current output size.
+    const size_t expected = dst_start.back() + sizes_with_pad.back();
+    assert(expected == cigar.size() && "Output 'cigar' must be preallocated to sum(len)+PAD*n_reads");
+    assert(cigar_ptr.size() == n_reads);
+
+    // 3) Parallel copy each read into its disjoint slice and set spans.
+    tbb::parallel_for(size_t(0), n_reads, [&](size_t i) {
+        const size_t s   = static_cast<size_t>(src_ptrs[i].start);
+        const size_t len = static_cast<size_t>(src_ptrs[i].len);
+        const size_t dst = dst_start[i];
+
+        // Copy CIGAR ops
+        std::memcpy(&cigar[dst], &src_cigar[s], len * sizeof(CigarOperation));
+
+        // Record span (no race: unique i)
+        cigar_ptr[i].start = dst;
+        cigar_ptr[i].len   = len;
+
+        // (Padding window for read i is [dst+len, dst+len+PAD) — left unused)
+    });
+}
+
 // Recalibrate implements the first step of base recalibration.
 //[[clang::optnone]]
 void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle) {
@@ -439,11 +490,30 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
 
     t.reset();
 
-    std::vector<std::vector<std::vector<CigarOperation>>> local_clipped_cigar(max_thread, std::vector<std::vector<CigarOperation>>(work_sz));
+    /*std::vector<std::vector<std::vector<CigarOperation>>> local_clipped_cigar(max_thread, std::vector<std::vector<CigarOperation>>(work_sz));
     std::vector<std::vector<SpanField>> local_clipped_cigar_ptrs(max_thread);
+*/
 
+    // Assume each read has its own CIGAR span in reads.CIGAR (flattened layout)
+    // and reads.CIGAR.Ptrs() provides start offsets for each read.
+    // 0) locals
+    profiler.start(StageId::CopyCigar);
+    size_t PAD = 8;
+    const auto& src_cigar = reads.CIGAR.Data();
+    const auto& src_ptrs  = reads.CIGAR.Ptrs();
+    const size_t n_reads  = src_ptrs.size();
+
+    // 1) preallocate: sum(len) + PAD*n_reads (you already did this)
+    std::vector<CigarOperation> cigar(reads.CIGAR.size() + PAD * n_reads);
+    std::vector<SpanField>     cigar_ptr(n_reads);
+
+    parallel_copy_cigar_with_padding(src_cigar, src_ptrs, cigar, cigar_ptr, PAD);
+
+    profiler.stop(StageId::CopyCigar);
+
+    profiler.start(StageId::AdaptSequences);
     tbb::parallel_for(0UL, max_thread, [&](size_t threadIdx) {
-
+    //for (auto threadIdx = 0; threadIdx < max_thread; threadIdx++) {
         for (size_t idx = threadIdx * work_sz, local_idx = 0; idx < (threadIdx * work_sz + work_sz); idx++, local_idx++) {
             if (idx >= maxIdx) {
                 return;
@@ -452,33 +522,29 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
                 continue;
             }
 
-            std::vector<CigarOperation> CIGAR(reads.GetCIGAR(idx).begin(), reads.GetCIGAR(idx).end());
-
-
-            hardClipAdaptorSequence(CIGAR, pos[idx], clippedSequences, clippedSequencesPtrs[idx],
-                                    clippedQualities, clippedQualitiesPtrs[idx], idx, reads.GetRNAME(idx),
-                                    reads.GetFLAG(idx),
-                                    reads.GetRNEXT(idx), reads.GetTLEN(idx),
-                                    reads.GetPNEXT(idx)); // It call a function that modifies the aln
+            //std::vector<CigarOperation> CIGAR(reads.GetCIGAR(idx).begin(), reads.GetCIGAR(idx).end());
+            //SpanField cigar_ptr_tmp(0, CIGAR.size());
+            //CIGAR.resize(CIGAR.size() + 16);
+            deviceHardClipAdaptorSequence(cigar.data(), cigar_ptr[idx], pos[idx], clippedSequences, clippedSequencesPtrs[idx],
+                                          clippedQualities, clippedQualitiesPtrs[idx], idx, reads.GetRNAME(idx),
+                                          reads.GetFLAG(idx),
+                                          reads.GetRNEXT(idx), reads.GetTLEN(idx),
+                                          reads.GetPNEXT(idx));
 
             if (clippedSequencesPtrs[idx].len == 0) {
                 continue;
             }
-            hardClipSoftClippedBases(CIGAR, pos[idx], clippedSequences, clippedSequencesPtrs[idx],
+            deviceHardClipSoftClippedBases(cigar.data(), cigar_ptr[idx], pos[idx], clippedSequences, clippedSequencesPtrs[idx],
                                      clippedQualities, clippedQualitiesPtrs[idx], reads.GetRNAME(idx),
-                                     reads.GetFLAG(idx)); // It call a function that modifies the aln
-
-            if (clippedSequencesPtrs[idx].len == 0) {
-                continue;
-            }
-            local_clipped_cigar[threadIdx][local_idx] = CIGAR; // TODO: Change this when doing multithreading because idx will not start from 0 when number of threads is greater than 1
+                                     reads.GetFLAG(idx));
         }
-    });
+    }
+    );
 
     Logger::getLogger().log(LOG_INFO, "Time to clip sequences: " + std::to_string(t.elapsed()));
 
     t.reset();
-    size_t totSz = 0;
+    /*size_t totSz = 0;
     for (const auto& cigars_thread : local_clipped_cigar) {
         for (const auto& cigar : cigars_thread) {
             totSz += cigar.size();
@@ -486,24 +552,14 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     }
 
     std::vector<CigarOperation> clipped_cigar_flat(totSz);
+    */
     std::vector<size_t> clipped_cigar_flat_start(reads.GetAlnsNum());
     std::vector<uint16_t> clipped_cigar_flat_len(reads.GetAlnsNum());
-    size_t i = 0;
-    size_t ptr = 0;
-    for (const auto& cigars_thread : local_clipped_cigar) {
-        for (const auto& cigar : cigars_thread) {
-            if (i >= reads.GetAlnsNum()) {
-                break;
-            }
-            if (cigar.size() > 0) {
-                std::memcpy(clipped_cigar_flat.data() + ptr, cigar.data(), cigar.size() * sizeof(CigarOperation));
-            }
-            clipped_cigar_flat_start[i] = ptr;
-            clipped_cigar_flat_len[i] = cigar.size();
-            ptr += cigar.size();
-            i++;
-        }
-    }
+
+    tbb::parallel_for (0UL, reads.GetAlnsNum(), [&](size_t i) {
+        clipped_cigar_flat_start[i] = cigar_ptr[i].start;
+        clipped_cigar_flat_len[i] = cigar_ptr[i].len;
+    });
 
     Logger::getLogger().log(LOG_INFO, "Time to flatten clipped cigar vectors: " + std::to_string(t.elapsed()));
 
@@ -511,6 +567,7 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
 
     size_t total_sequences = reads.GetAlnsNum();
     size_t batch_size = reads.GetAlnsNum();
+    profiler.stop(StageId::AdaptSequences);
 
     profiler.stop(StageId::Transform);
 
@@ -526,7 +583,7 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
                       clippedSequencesPtrs,
                       clippedQualities,
                       clippedQualitiesPtrs,
-                      clipped_cigar_flat.data(),
+                      cigar.data(),
                       clipped_cigar_flat_start.data(),
                       clipped_cigar_flat_len.data(),
                       pos.data(),

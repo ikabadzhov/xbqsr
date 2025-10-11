@@ -391,6 +391,145 @@ void hardClip(std::vector<CigarOperation>& cigar, char* SEQ, SpanField& sequence
     }
 }
 
+
+/*void hardClipCigar(std::vector<CigarOperation>& cigar, std::vector<CigarOperation>& new_cigar, int64_t start, int64_t stop) {
+    if (cigar.empty()) return;
+
+    // Write pointer for in-place rewrite
+    size_t w = 0;
+
+    auto consumes_read = [&](char op) -> int32_t {
+        return CigarOperatorConsumesReadBases[static_cast<uint8_t>(op)] > 0 ? 1 : 0;
+    };
+
+    // FRONT CLIP: clip [0..stop] into leading 'H'
+    if (start == 0) {
+        int64_t read_index = 0;                 // read bases consumed so far
+        int64_t totalHardClipCount = stop - start + 1;  // size of requested clip
+        int64_t alignmentShift = 0;
+
+        // Fold pre-existing leading H into totalHardClipCount
+        size_t i = 0;
+        while (i < cigar.size() && cigar[i].Operation == 'H') {
+            totalHardClipCount += cigar[i].Length;
+            ++i;
+        }
+
+        // Walk until we have clipped up to stop
+        for (; i < cigar.size() && read_index <= stop; ++i) {
+            const auto op = cigar[i];
+            const int32_t op_len = op.Length;
+            const int32_t r = consumes_read(op.Operation) ? op_len : 0;
+
+            if (read_index + r == stop + 1) {
+                // Boundary lands exactly at the end of this op
+                alignmentShift += calculateHardClippingAlignmentShift(op, op_len);
+
+                // Write the new leading H
+                cigar[w++] = CigarOperation(static_cast<int32_t>(totalHardClipCount + alignmentShift), 'H');
+                // Copy the remainder of the CIGAR as-is
+                for (size_t k = i + 1; k < cigar.size(); ++k) cigar[w++] = cigar[k];
+                cigar.resize(w);
+                cleanHardClippedCigar(cigar);
+                return;
+            } else if (read_index + r > stop + 1) {
+                // Boundary falls inside this op: split it
+                const int32_t clip_here = static_cast<int32_t>(stop - read_index + 1);
+                const int32_t remain   = op_len - clip_here;
+
+                alignmentShift += calculateHardClippingAlignmentShift(op, clip_here);
+
+                // Write the new leading H
+                cigar[w++] = CigarOperation(static_cast<int32_t>(totalHardClipCount + alignmentShift), 'H');
+
+                // Write the remainder of the boundary op (if any)
+                if (remain > 0) cigar[w++] = CigarOperation(remain, op.Operation);
+
+                // Copy the rest
+                for (size_t k = i + 1; k < cigar.size(); ++k) cigar[w++] = cigar[k];
+                cigar.resize(w);
+                cleanHardClippedCigar(cigar);
+                return;
+            }
+
+            // We entirely consumed this op in the clipped region
+            read_index += r;
+            alignmentShift += calculateHardClippingAlignmentShift(op, r);
+        }
+
+        // If we reach here, we clipped through (or up to) the end of CIGAR read span.
+        cigar.clear();
+        cigar.emplace_back(CigarOperation(static_cast<int32_t>(totalHardClipCount + alignmentShift), 'H'));
+        cleanHardClippedCigar(cigar);
+        return;
+    }
+
+    // BACK CLIP: keep prefix up to 'start', then convert suffix [start..end] to trailing 'H'
+    {
+        int64_t read_index = 0;
+        int64_t totalHardClipCount = 0;
+        int64_t alignmentShift = 0;
+
+        size_t i = 0;
+
+        // Copy ops strictly before 'start'; possibly truncate boundary op
+        for (; i < cigar.size(); ++i) {
+            const auto op = cigar[i];
+            const int32_t op_len = op.Length;
+            const int32_t r = consumes_read(op.Operation) ? op_len : 0;
+
+            if (read_index + r < start) {
+                // Entire op lies before 'start' → keep as-is
+                cigar[w++] = op;
+            } else if (read_index < start && read_index + r >= start) {
+                // Boundary falls inside this op: keep left piece
+                const int32_t keep_len = static_cast<int32_t>(start - read_index);
+
+                if (op.Operation == 'H') {
+                    // If it's H, we conceptually count the left part as kept;
+                    // do not emit partial H before boundary (kept H stays as-is in previous ops).
+                    // But usually H doesn't consume read bases; boundary won't land inside H
+                    // unless start==read_index, which is handled by branches.
+                } else if (keep_len > 0) {
+                    cigar[w++] = CigarOperation(keep_len, op.Operation);
+                }
+
+                // The rest of this op (right piece) is part of the clipped suffix
+                const int32_t clip_here = op_len - keep_len;
+                alignmentShift += calculateHardClippingAlignmentShift(op, clip_here);
+
+                ++i; // advance past boundary op
+                break;
+            } else {
+                // read_index >= start: we're already in the clipped suffix
+                break;
+            }
+
+            read_index += r;
+        }
+
+        // Now sum the alignment shift and collect trailing H across the suffix (including from i..end)
+        for (; i < cigar.size(); ++i) {
+            const auto op = cigar[i];
+            if (op.Operation == 'H') {
+                totalHardClipCount += op.Length;
+            } else {
+                const int32_t r = consumes_read(op.Operation) ? op.Length : 0;
+                alignmentShift += calculateHardClippingAlignmentShift(op, r);
+            }
+        }
+
+        // Append a single trailing H that represents the whole clipped suffix
+        cigar[w++] = CigarOperation(static_cast<int32_t>(totalHardClipCount + alignmentShift), 'H');
+
+        // Shrink and clean
+        cigar.resize(w);
+        cleanHardClippedCigar(cigar);
+    }
+}
+*/
+
+// ORIGINAL VERSION
 void hardClipCigar(std::vector<CigarOperation>& cigar, std::vector<CigarOperation>& new_cigar, int64_t start, int64_t stop) {
     int64_t index = 0;
     auto totalHardClipCount = stop - start + 1;
@@ -472,14 +611,235 @@ void hardClipCigar(std::vector<CigarOperation>& cigar, std::vector<CigarOperatio
 //    newCigarPtrs.start = newCigarPtrs.start;
 //    newCigarPtrs.len = j;
     cleanHardClippedCigar(new_cigar);
-    assert(new_cigar.size() < cigar.size() + 6);
+}
+
+// VERSION TO BRING ON DEVICE
+//[[clang::optnone]]
+void hardClipCigar2(std::vector<CigarOperation>& cigar, std::vector<CigarOperation>& new_cigar, int64_t start, int64_t stop) {
+    std::vector<CigarOperation> tmp_cigar(cigar.begin(), cigar.end());
+    CigarOperation buff[4] = { CigarOperation(0,'\0'), CigarOperation(0,'\0'),
+                               CigarOperation(0,'\0'), CigarOperation(0,'\0') };
+
+    int j = 0;                       // number of new ops produced (0..2)
+    int64_t index = 0;               // read-bases consumed so far
+    auto totalHardClipCount = stop - start + 1;
+    int64_t alignmentShift = 0;
+    new_cigar.clear();
+
+    if (start == 0) {
+        // Work on a temporary copy; extend space once for safe shifts.
+        const size_t cigar_sz = tmp_cigar.size();
+        tmp_cigar.resize(cigar_sz + 16);
+
+        int64_t cigarOpIndex = 0;
+        CigarOperation cigarOp(0, 0);
+
+        // Fold leading H into totalHardClipCount (identical to original)
+        for (; cigarOpIndex < (int64_t)cigar_sz; ++cigarOpIndex) {
+            cigarOp = tmp_cigar[(size_t)cigarOpIndex];
+            if (cigarOp.Operation != 'H') break;
+            totalHardClipCount += static_cast<int32_t>(cigarOp.Length);
+        }
+
+        // Walk until index > stop or we reach the end (identical stopping condition).
+        for (; index <= stop && cigarOpIndex < (int64_t)cigar_sz; ++cigarOpIndex) {
+            cigarOp = tmp_cigar[(size_t)cigarOpIndex];
+            const int32_t cigarOpLength = cigarOp.Length;
+
+            int32_t shift = 0;
+            if (CigarOperatorConsumesReadBases[(uint8_t)cigarOp.Operation] > 0) {
+                shift = CigarOperatorConsumesReadBases[(uint8_t)cigarOp.Operation] * cigarOpLength;
+            }
+
+            if (index + shift == stop + 1) {
+                alignmentShift += calculateHardClippingAlignmentShift(cigarOp, cigarOpLength);
+                buff[j] = CigarOperation(int32_t(totalHardClipCount + alignmentShift), 'H');
+                ++j; // only one op added here
+            } else if (index + shift > stop + 1) {
+                const int32_t clipLen = int32_t(stop - index + 1);
+                const int32_t lengthAfterChopping = cigarOpLength - clipLen;
+                alignmentShift += calculateHardClippingAlignmentShift(cigarOp, clipLen);
+
+                buff[j] = CigarOperation(int32_t(totalHardClipCount + alignmentShift), 'H');
+                ++j;
+                buff[j] = CigarOperation(int32_t(lengthAfterChopping), cigarOp.Operation);
+                ++j; // two ops added here
+            }
+
+            index += shift;
+            alignmentShift += calculateHardClippingAlignmentShift(cigarOp, shift);
+            // NB: No manual break here — we mirror the original loop semantics exactly.
+        }
+
+        // Now splice buff[0..j-1] + tail(tmp_cigar[cigarOpIndex..cigar_sz-1]) into tmp_cigar[...]
+        if (j < cigarOpIndex) {
+            // Shift tail left: write buff at [0..j-1], then copy tail to follow.
+            size_t writePos = 0;
+            for (int k = 0; k < j; ++k) {
+                tmp_cigar[writePos++] = buff[k];
+            }
+            for (size_t i = (size_t)cigarOpIndex; i < cigar_sz; ++i) {
+                tmp_cigar[writePos++] = tmp_cigar[i];
+            }
+            tmp_cigar.resize(writePos);
+        } else {
+            // j >= cigarOpIndex → shift tail right by delta, then write buff at front.
+            const size_t tailStart = (size_t)cigarOpIndex;
+            const size_t tailLen   = cigar_sz - tailStart;
+            const size_t delta     = (size_t)j - (size_t)cigarOpIndex; // how much more we insert than we removed
+
+            // Move tail from end to begin to avoid clobbering.
+            for (size_t n = tailLen; n-- > 0; ) {
+                tmp_cigar[tailStart + delta + n] = tmp_cigar[tailStart + n];
+            }
+            // Write new ops at the very front
+            for (int k = 0; k < j; ++k) {
+                tmp_cigar[(size_t)k] = buff[k];
+            }
+            tmp_cigar.resize(j + tailLen);
+        }
+
+        // Return result exactly as original would do
+        new_cigar.resize(tmp_cigar.size());
+        std::copy(tmp_cigar.begin(), tmp_cigar.end(), new_cigar.begin());
+    } else {
+        // Suffix clip (start > 0): keep prefix up to 'start', then add a single trailing 'H'
+
+        // Work on tmp_cigar, and give ourselves a small buffer once.
+        size_t cigar_sz = tmp_cigar.size();
+        tmp_cigar.resize(cigar_sz + 16);  // safe working space; we will shrink later
+
+        int32_t cigarOpIndex = 0;
+        size_t w = 0;                    // write head for kept/left-piece ops
+
+        // 1) Copy ops strictly before the boundary; if boundary lands inside an op, keep its left piece
+        for (; index < start && cigarOpIndex < (int32_t)cigar_sz; ++cigarOpIndex) {
+            auto cigarOp = tmp_cigar[(size_t)cigarOpIndex];
+            int32_t cigarOpLength = cigarOp.Length;
+
+            int32_t shift = 0;
+            if (CigarOperatorConsumesReadBases[(uint8_t)cigarOp.Operation] > 0) {
+                shift = CigarOperatorConsumesReadBases[(uint8_t)cigarOp.Operation] * cigarOpLength;
+            }
+
+            if (index + shift < start) {
+                // Entire op lies before the clip boundary → keep as-is
+                tmp_cigar[w++] = cigarOp;
+            } else {
+                // Boundary falls inside this op
+                auto lengthAfterChoppingLeft = (int32_t)(start - index); // portion to KEEP on the left
+
+                // Accumulate alignment shift for the CLIPPED right part (same as original)
+                alignmentShift += calculateHardClippingAlignmentShift(
+                                      cigarOp,
+                                      cigarOpLength - lengthAfterChoppingLeft);
+
+                if (cigarOp.Operation == 'H') {
+                    // Original behavior: if boundary lands inside H, add kept amount to totalHardClipCount
+                    totalHardClipCount += lengthAfterChoppingLeft;
+                } else if (lengthAfterChoppingLeft > 0) {
+                    // Keep the left piece
+                    tmp_cigar[w++] = CigarOperation(lengthAfterChoppingLeft, cigarOp.Operation);
+                }
+            }
+
+            index += shift;
+        }
+
+        // 2) Everything from cigarOpIndex..end is fully clipped → accumulate shift and H lengths
+        for (; cigarOpIndex < (int32_t)cigar_sz; ++cigarOpIndex) {
+            auto cigarOp = tmp_cigar[(size_t)cigarOpIndex];
+            alignmentShift += calculateHardClippingAlignmentShift(cigarOp, (int)cigarOp.Length);
+            if (cigarOp.Operation == 'H') {
+                totalHardClipCount += (int32_t)cigarOp.Length;
+            }
+        }
+
+        // 3) Append the single trailing H summarizing the clipped suffix
+        tmp_cigar[w++] = CigarOperation((int32_t)(totalHardClipCount + alignmentShift), 'H');
+
+        // 4) Shrink to final size and export to new_cigar (to match original signature/behavior)
+        tmp_cigar.resize(w);
+        new_cigar.resize(tmp_cigar.size());
+        std::copy(tmp_cigar.begin(), tmp_cigar.end(), new_cigar.begin());
+    }
+//    newCigarPtrs.start = newCigarPtrs.start;
+//    newCigarPtrs.len = j;
+    cleanHardClippedCigar(new_cigar);
+}
+
+void cleanHardClippedCigar(std::vector<CigarOperation>& cigar) {
+    if (cigar.empty()) return;
+
+    const size_t oldN = cigar.size();
+
+    // 1) Scan leading H/D/N and accumulate their total length.
+    int32_t lead_sum = 0;
+    size_t lead_i = 0;
+    for (; lead_i < oldN; ++lead_i) {
+        char op = cigar[lead_i].Operation;
+        if (op == 'H' || op == 'D' || op == 'N') {
+            lead_sum += cigar[lead_i].Length;
+        } else {
+            break;
+        }
+    }
+
+    // 2) Scan trailing H/D/N and accumulate their total length.
+    int32_t trail_sum = 0;
+    size_t trail_start = oldN; // index of first trailing element to drop/merge
+    if (oldN > 0) {
+        ssize_t back = static_cast<ssize_t>(oldN) - 1;
+        for (; back >= 0; --back) {
+            char op = cigar[(size_t)back].Operation;
+            if (op == 'H' || op == 'D' || op == 'N') {
+                trail_sum += cigar[(size_t)back].Length;
+            } else {
+                break;
+            }
+        }
+        trail_start = (size_t)back + 1; // [trail_start .. oldN) are trailing H/D/N
+    }
+
+    // 3) If there is no middle (everything is H/D/N), output a single H(total)
+    //    identical to the original forward+backward behavior.
+    size_t writePos = 0;
+    if (lead_i >= trail_start) {
+        // All H/D/N (or middle empty): merge into one H with the total length.
+        // Here, lead_sum == sum of all H/D/N because lead_i consumed everything.
+        cigar[0] = CigarOperation(lead_sum, 'H');
+        writePos = 1;
+        cigar.resize(writePos);
+        return;
+    }
+
+    // 4) Otherwise, compose: [optional leading H] + middle + [optional trailing H]
+
+    // Optional leading H (only if there were leading H/D/N)
+    if (lead_i > 0) {
+        cigar[writePos++] = CigarOperation(lead_sum, 'H');
+    }
+
+    // Middle segment: copy [lead_i .. trail_start)
+    // (forward copy is safe: dest index <= src index)
+    for (size_t k = lead_i; k < trail_start; ++k) {
+        cigar[writePos++] = cigar[k];
+    }
+
+    // Optional trailing H (only if there were trailing H/D/N)
+    if (trail_start < oldN) {
+        cigar[writePos++] = CigarOperation(trail_sum, 'H');
+    }
+
+    // Single final shrink
+    cigar.resize(writePos);
 }
 
 
-void cleanHardClippedCigar(std::vector<CigarOperation>& cigar) {
+void cleanHardClippedCigarOriginal(std::vector<CigarOperation>& cigar) {
     int32_t totalHardClip = 0;
     int32_t index = 0;
-//forward:
+    //forward:
     for (; index < cigar.size(); index++) {
         auto element = cigar[index];
         if (element.Operation=='H' || element.Operation=='D' || element.Operation=='N') {
@@ -498,7 +858,7 @@ void cleanHardClippedCigar(std::vector<CigarOperation>& cigar) {
     totalHardClip = 0;
     index = cigar.size() - 1;
 
-//backward:
+    //backward:
     for (; index >= 0; index--) {
         auto element = cigar[index];
         if (element.Operation=='H' || element.Operation=='D' || element.Operation=='N') {

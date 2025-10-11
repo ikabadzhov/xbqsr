@@ -132,6 +132,7 @@ add_executable(bqsr main.cpp
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsFunctions.h
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsData.h
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsData.cpp
+		bqsr/UtilsBQSR.cpp
 		input_output/parser/IOBatch.cpp
 		input_output/parser/IOBatch.h
 		Config.cpp

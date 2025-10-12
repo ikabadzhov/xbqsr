@@ -163,9 +163,9 @@ void batch_processing_variable_length(sycl::device& device, input_data_t& input,
         // swap roles: loaded buffer becomes the next to process
         batch_process->_n_processed = batch_process->_n;
 
-        auto tmp_max = batch_transfer->_max_num_elements; // if you need to carry this across
+        //auto tmp_max = batch_transfer->_max_num_elements; // if you need to carry this across
         std::swap(batch_process, batch_transfer);
-        batch_transfer->_max_num_elements = tmp_max;
+        //batch_transfer->_max_num_elements = tmp_max;
 
         first_batch = false;
         ++ith_batch;

@@ -76,7 +76,7 @@ size_t SamAlignmentFormatter::GetSamAlignmentSize(SamAlignments& alns, ssize_t i
 
         if (tagKeyAsString == "RG") {
             // it shouldn't need any check on the presence of RG tagValue
-            tot_sz += alns.TAGS.RG.toString(idx).size();
+            tot_sz += alns.GetHdr().getReadGroupRecord().getString(alns.TAGS.RG[idx]).size();//alns.TAGS.RG.toString(idx).size();
             //line.append(1, '\t');
             tot_sz += 6;
         } else {
@@ -388,7 +388,7 @@ void SamAlignmentFormatter::FormatSamAlignmentInBuffer(SamAlignments& alns, ssiz
         if (tagKeyAsString == "RG") {
             out[offset++] = '\t';
             // For the RG tag, get its value.
-            value = alns.TAGS.RG.toString(idx);
+            value = alns.GetHdr().getReadGroupRecord().getString(alns.TAGS.RG[idx]);
             std::string decoded = TagKeyAndType::decode(tagKey);
             copyStringView(out, decoded, offset);
             out[offset++] = ':';
@@ -628,7 +628,7 @@ void SamAlignmentFormatter::FormatSamAlignment(SamAlignments& alns, ssize_t idx,
 
         if (tagKeyAsString == "RG") {
             // it shouldn't need any check on the presence of RG tagValue
-            value = alns.TAGS.RG.toString(idx);
+            value = alns.GetHdr().getReadGroupRecord().getString(alns.TAGS.RG[idx]);
             line.append(1, '\t');
             line.append(TagKeyAndType::decode(tagKey));
             line.append(1, ':');

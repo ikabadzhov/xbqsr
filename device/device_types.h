@@ -99,6 +99,14 @@ concept DerivedFromInputDataT = std::is_base_of_v<InputData, input_data_t>;
 template<typename output_data_t>
 concept DerivedFromOutputDataT = std::is_base_of_v<OutputData, output_data_t>;
 
+
+
+template <typename KD, typename InputT>
+concept KernelDataWithSizer =
+    requires(const InputT& in, const KD& kd, size_t start) {
+    { KD::compute_max_elements(in, kd, start) } -> std::convertible_to<size_t>;
+    };
+
 template <typename kernel_data_t, typename batch_config_t>
 class Batch {
 public:
@@ -123,23 +131,31 @@ public:
     template<typename InputT>
     requires DerivedFromInputDataT<InputT>
     void memcpy_host_to_dev(InputT& input) {
-        size_t n_reads_loading = input._n - input._n_loaded;
-        if (n_reads_loading <= 0){
+        // how many are left in input?
+        size_t avail = input._n - input._n_loaded;
+        if (avail == 0) { this->_n = 0; return; }
+
+        // 1) Decide how many *fit this arena* starting at input._n_loaded
+        const size_t first = input._n_loaded;
+        size_t n_fit = kernel_data_t::compute_max_elements(input, this->_d_data, first);
+
+        if (n_fit == 0) {           // nothing fits in this slab → stop cleanly
             this->_n = 0;
             return;
         }
+        if (n_fit > avail) n_fit = avail;
 
-        if (n_reads_loading > _max_num_elements) {
-            n_reads_loading = _max_num_elements;
-        }
-        this->_n = n_reads_loading;
-        size_t first_read_id = input._n_loaded;
-        // TODO: Maybe we should change the method so that the destination offset is 0, as we always fill from 0.
-        kernel_data_t::memcpy_host_to_dev(_q_transfer, this->_d_data, 0, input, first_read_id, n_reads_loading);
-        input._n_to_process -= n_reads_loading;
-        input._n_loaded += n_reads_loading;
-        // TODO: Check that this doesn't break the compatibility in the other algorithms, e.g. mark duplicates
-        _max_num_elements = _d_data.max_num_elements;
+        // 2) Copy exactly n_fit into *this* arena
+        this->_n = n_fit;
+        kernel_data_t::memcpy_host_to_dev(_q_transfer, this->_d_data, /*dest_offset=*/0,
+                                          input, /*src_offset=*/first, /*n_elements=*/n_fit);
+
+        // 3) Advance input cursors
+        input._n_to_process -= n_fit;
+        input._n_loaded     += n_fit;
+
+        // 4) (Optional) cache for stats/telemetry; no cross-arena shuttling needed
+        this->_max_num_elements = n_fit;
     }
 
     template<typename OutputT>

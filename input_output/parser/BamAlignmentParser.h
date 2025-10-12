@@ -21,8 +21,7 @@ public:
 
     static void ParseBamAlignmentFromSliceSimpleTypes(std::string_view bytes, SamAlignments &reads, size_t idx, VariableLenFieldsVar& fieldsOff, VariableLenFieldsVar& fieldsSizes);
 
-    static void ParseBamAlignmentFromSliceComplexTypes(std::string_view bytes, SamAlignments &reads, size_t idx,
-                                                VariableLenFieldsVar &fieldsOff, VariableLenFieldsVar& fieldsSizes, VariableLenFieldsVar& outputOff);
+    static void ParseBamAlignmentFromSliceComplexTypes(std::string_view bytes, SamAlignments &reads, size_t idx, VariableLenFieldsVar const& fieldsOff, VariableLenFieldsVar const& fieldsSizes, VariableLenFieldsVar const& outOff);    // pass TAGS so we can write at fixed offsets
 };
 
 

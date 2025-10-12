@@ -100,11 +100,11 @@ bool alignmentAgreesWithHeader(Header& hdr, int32_t rname, int32_t pos) {
     return false;
 }
 
-bool isStrictUnmapped(bool isUnmapped, int32_t rname, int32_t pos) {
+SYCL_EXTERNAL bool isStrictUnmapped(bool isUnmapped, int32_t rname, int32_t pos) {
     return (isUnmapped || SequenceRecord::isEmpty(rname) || rname == SequenceRecord::RESERVED_SEQUENCE_NAMES['*'] || pos==0);
 }
 
-bool isStrictNextUnmapped(bool isNextUnmapped, int32_t rnext, int32_t pnext) {
+SYCL_EXTERNAL bool isStrictNextUnmapped(bool isNextUnmapped, int32_t rnext, int32_t pnext) {
     return (isNextUnmapped || SequenceRecord::UNAVAILABLE_SEQUENCE_INDEX == rnext || rnext == SequenceRecord::RESERVED_SEQUENCE_NAMES['*'] || pnext == 0);
 }
 

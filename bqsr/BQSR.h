@@ -69,13 +69,13 @@ public:
                    int32_t maxCycle);
 
     void
-    PrintBQSRTables(const std::string &filename, CompressedStringCollection &RG, Header &hdr);
+    PrintBQSRTables(const std::string &filename, std::vector<int32_t>& RG, Header &hdr);
 
 private:
     void printOtherCovariateTable(std::ostream& file, Header &hdr);
     void printBQSRTable(std::ofstream& filename, Header &hdr);
     void printQuantizationTable(std::ofstream &file);
-    void printCombinedBQSRTable(std::ostream& file, CompressedStringCollection& RG, Header &hdr);
+    void printCombinedBQSRTable(std::ostream &file, std::vector<int32_t>& RG, Header &hdr);
 };
 
 uint32_t MaxContextCovariateKey();

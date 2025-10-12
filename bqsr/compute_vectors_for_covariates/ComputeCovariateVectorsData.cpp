@@ -5,10 +5,11 @@
 #include "../../logger/Logger.h"
 #include "../../sycl_parallel_library/sorting/mergesort.h"
 
+
 static size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelData& kernel_data, size_t start_idx, size_t n_elements);
 
 
-SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
+SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
         h_known_sites = known_sites.data();
         h_known_sites_ptr = known_sites_ptr.data();
         h_known_sites_ptr_sz = known_sites_ptr.size();
@@ -27,10 +28,12 @@ SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong
         h_sequences = sequence;
         h_sequences_ptr = sequence_ptr;
         h_cigar = cigar;
-        h_cigar_start = cigar_start;
-        h_cigar_len = cigar_len;
+        h_cigar_ptr = cigar_ptr;
         h_qualities = qualities;
         h_qualities_ptr = qualities_ptr;
+        h_rnext = rnext;
+        h_pnext = pnext;
+        h_tlen = tlen;
         h_pos = pos;
         h_rname = rname;
         h_recalibrated = recalibrated;
@@ -61,14 +64,21 @@ void ComputeSkipSliceKernelData::swap(ComputeSkipSliceKernelData &rhs) {
     std::swap(d_sequences_ptr, rhs.d_sequences_ptr);
 
     std::swap(d_cigar, rhs.d_cigar);
-    std::swap(d_cigar_start, rhs.d_cigar_start);
-    std::swap(d_cigar_len, rhs.d_cigar_len);
+    std::swap(d_clipped_cigar, rhs.d_clipped_cigar);
+    std::swap(d_cigar_ptr, rhs.d_cigar_ptr);
+    std::swap(d_clipped_cigar_start, rhs.d_clipped_cigar_start);
+    std::swap(d_clipped_cigar_len, rhs.d_clipped_cigar_len);
 
     std::swap(d_qualities, rhs.d_qualities);
     //std::swap(d_qualities_ptr, rhs.d_qualities_ptr);
 
     std::swap(d_pos, rhs.d_pos);
     std::swap(d_rname, rhs.d_rname);
+
+    std::swap(d_rnext, rhs.d_rnext);
+    std::swap(d_pnext, rhs.d_pnext);
+    std::swap(d_tlen, rhs.d_tlen);
+
     std::swap(d_recalibrated, rhs.d_recalibrated);
     std::swap(d_flag, rhs.d_flag);
     std::swap(d_reads_group_covariate, rhs.d_reads_group_covariate);
@@ -97,46 +107,16 @@ void ComputeSkipSliceKernelData::swap(ComputeSkipSliceKernelData &rhs) {
     std::swap(d_cycle_table_vals, rhs.d_cycle_table_vals);
     std::swap(d_context_table_vals, rhs.d_context_table_vals);
 
+    /*
     std::swap(d_segments_quality, rhs.d_segments_quality);
     std::swap(d_segments_cycle, rhs.d_segments_cycle);
-    std::swap(d_segments_context, rhs.d_segments_context);
-
-//    std::swap(num_segments_quality, rhs.num_segments_quality);
-//    std::swap(num_segments_cycle, rhs.num_segments_cycle);
-//    std::swap(num_segments_context, rhs.num_segments_context);
-
-    std::swap(d_read_index, rhs.d_read_index);
-    std::swap(d_i_offset, rhs.d_i_offset);
-    std::swap(d_j_offset, rhs.d_j_offset);
-    //std::swap(d_table_indexes_ptr, rhs.d_table_indexes_ptr);
+    std::swap(d_segments_context, rhs.d_segments_context);*/
 
     std::swap(prev_batch_max_index, rhs.prev_batch_max_index);
     std::swap(_n_expanded_cigar_ops, rhs._n_expanded_cigar_ops);
-//    std::swap(d_index_offset, rhs.d_index_offset);
 }
 
 ComputeSkipSliceKernelData::~ComputeSkipSliceKernelData() {
-
-//    if (d_known_sites) {
-//        sycl::free(d_known_sites, _q);
-//        d_known_sites = nullptr;
-//    }
-//    if (d_known_sites_ptr) {
-//        sycl::free(d_known_sites_ptr, _q);
-//        d_known_sites_ptr = nullptr;
-//    }
-//    if (d_reference) {
-//        sycl::free(d_reference, _q);
-//        d_reference = nullptr;
-//    }
-//    if (d_reference_ptr) {
-//        sycl::free(d_reference_ptr, _q);
-//        d_reference_ptr = nullptr;
-//    }
-//    if (d_index_offset) {
-//        sycl::free(d_index_offset, _q);
-//        d_index_offset = nullptr;
-//    }
     if (memory_buffer) {
         sycl::free(memory_buffer, _q);
         memory_buffer = nullptr;
@@ -153,7 +133,52 @@ ComputeSkipSliceKernelData &ComputeSkipSliceKernelData::operator=(ComputeSkipSli
     return *this;
 }
 
+// Small helpers
+inline size_t align_up(size_t x, size_t a) {
+    const size_t m = a - 1;
+    return (x + m) & ~m;
+}
 
+template <class T>
+inline T* alloc_and_copy(sycl::queue& q,
+                         char* base,
+                         size_t& offset,
+                         const T* src,
+                         size_t count)
+{
+    const size_t align = alignof(T);
+    const size_t aligned = align_up(offset, align);
+    const size_t bytes = count * sizeof(T);
+
+    T* dst = reinterpret_cast<T*>(base + aligned);
+    if (src && count) {
+        q.memcpy(dst, src, bytes);
+    }
+    offset = aligned + bytes;
+    return dst;
+}
+
+template <class T>
+inline T* alloc_simple(char* base,
+                       size_t& offset,
+                       size_t count)
+{
+    const size_t align = alignof(T);
+    const size_t aligned = align_up(offset, align);
+    const size_t bytes = count * sizeof(T);
+
+    T* dst = reinterpret_cast<T*>(base + aligned);
+    offset = aligned + bytes;
+    return dst;
+}
+
+template <class T>
+inline void simulate_alloc(size_t& offset, size_t count) noexcept {
+    offset = align_up(offset, alignof(T));
+    offset += count * sizeof(T);
+}
+
+//[[clang::optnone]]
 void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue, ComputeSkipSliceKernelData& dest, size_t dest_offset, const SequencesInput& src,
                                size_t src_offset, size_t n_elements) {
     Timer t;
@@ -161,7 +186,7 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
     size_t actual_data_movement = 0;
     try {
         if (dest.is_first_copy) {
-            dest.d_known_sites_ptr = src.h_known_sites_ptr; // SHARED MEMMORY HOST-DEV
+            dest.d_known_sites_ptr = src.h_known_sites_ptr; // SHARED MEMORY HOST-DEV
             dest.d_reference_ptr = src.h_reference_ptr;
             dest.d_known_sites = src.h_known_sites;
             dest.d_reference = src.h_reference;
@@ -181,6 +206,7 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
             dest.is_first_copy = false;
             transfer_queue.wait();
         }
+
         size_t offset = 0;
         if (n_elements > 0) {
             size_t chunk_sz = 0;
@@ -190,409 +216,296 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
             {
                 //transfer_queue.memcpy(dest.d_sequence_span_offset, &src.h_sequences_ptr[src_offset].start, sizeof(src.h_sequences_ptr[src_offset].start));
                 dest.d_sequence_span_offset = src.h_sequences_ptr[src_offset].start;
-                dest.d_cigar_span_offset = src.h_cigar_start[src_offset];
+                dest.d_cigar_span_offset = src.h_cigar_ptr[src_offset].start;
             }
 
             // 1. d_sequences
             {
-                dest.d_sequences = reinterpret_cast<char *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                                   src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                                  (src.h_sequences_ptr[src_offset].start);
                 size_t chunk_offset = src.h_sequences_ptr[src_offset].start;
-                size_t sequences_data_size = sizeof(src.h_sequences[0]) * chunk_sz;
-                transfer_queue.memcpy(dest.d_sequences, src.h_sequences + chunk_offset, sequences_data_size).wait();
-                offset += sequences_data_size;
-                actual_data_movement += sequences_data_size;
+                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                  src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                 (src.h_sequences_ptr[src_offset].start);
+                dest.d_sequences = alloc_and_copy(transfer_queue, base, offset, src.h_sequences + chunk_offset, chunk_sz);
             }
             // 2. Allocate d_sequences_ptr (an array of SpanField)
-            //    Align the pointer properly.
             {
-                size_t alignment = alignof(decltype(dest.d_sequences_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_sequences_ptr = reinterpret_cast<SpanField *>(base + offset);
-                size_t sequences_ptr_size = sizeof(dest.d_sequences_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_sequences_ptr, src.h_sequences_ptr + src_offset,
-                                      sequences_ptr_size);
-                actual_data_movement += sequences_ptr_size;
-
-                offset += sequences_ptr_size;
+                dest.d_sequences_ptr = alloc_and_copy(transfer_queue, base, offset, src.h_sequences_ptr + src_offset, n_elements);
             }
             // 3. Allocate d_cigar (an array of CigarOperation)
             {
-                size_t alignment = alignof(decltype(dest.d_cigar[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_cigar = reinterpret_cast<CigarOperation *>(base + offset);
-                chunk_sz = (src.h_cigar_start[src_offset + n_elements - 1] +
-                            src.h_cigar_len[src_offset + n_elements - 1]) - (src.h_cigar_start[src_offset]);
-                size_t chunk_offset = src.h_cigar_start[src_offset];
-                size_t cigar_data_size = sizeof(src.h_cigar[0]) * chunk_sz;
-                transfer_queue.memcpy(dest.d_cigar, src.h_cigar + chunk_offset, cigar_data_size);
-                actual_data_movement += cigar_data_size;
-                offset += cigar_data_size;
+                chunk_sz = (src.h_cigar_ptr[src_offset + n_elements - 1].start +
+                            src.h_cigar_ptr[src_offset + n_elements - 1].len) - (src.h_cigar_ptr[src_offset].start);
+                size_t chunk_offset = src.h_cigar_ptr[src_offset].start;
+                dest.d_cigar = alloc_and_copy(transfer_queue, base, offset, src.h_cigar + chunk_offset, chunk_sz);
+            }
+            // 4. Allocate d_cigar_span
+            {
+                dest.d_cigar_ptr = alloc_and_copy(transfer_queue, base, offset, src.h_cigar_ptr + src_offset, n_elements);
+            }
+            // 5. Allocate d_clipped_cigar
+            {
+                chunk_sz = ((src.h_cigar_ptr[src_offset + n_elements - 1].start +
+                            src.h_cigar_ptr[src_offset + n_elements - 1].len) - (src.h_cigar_ptr[src_offset].start)) + (n_elements * PAD);
+                dest.d_clipped_cigar = alloc_simple<CigarOperation>(base, offset, chunk_sz);
+            }
+            // 6 Allocate d_clipped_cigar_start (array of size_t)
+            {
+                dest.d_clipped_cigar_start =
+                    alloc_simple<size_t>(base, offset, n_elements);
             }
 
-            // 4.1 Allocate d_cigar_start (an array of SpanField)
+            // 7 Allocate d_clipped_cigar_len (array of uint16_t)
             {
-                size_t alignment = alignof(decltype(dest.d_cigar_start[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_cigar_start = reinterpret_cast<size_t*>(base + offset);
-                size_t cigar_ptr_size = sizeof(dest.d_cigar_start[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_cigar_start, src.h_cigar_start + src_offset, cigar_ptr_size);
-                actual_data_movement += cigar_ptr_size;
-                offset += cigar_ptr_size;
-            }
-            // 4.2 Allocate d_cigar_len (an array of SpanField)
-            {
-                size_t alignment = alignof(decltype(dest.d_cigar_len[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_cigar_len = reinterpret_cast<uint16_t*>(base + offset);
-                size_t cigar_ptr_size = sizeof(dest.d_cigar_len[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_cigar_len, src.h_cigar_len + src_offset, cigar_ptr_size);
-                actual_data_movement += cigar_ptr_size;
-                offset += cigar_ptr_size;
+                dest.d_clipped_cigar_len =
+                    alloc_simple<uint16_t>(base, offset, n_elements);
             }
 
-            // 5. Allocate d_qualities (an array of char)
+            // 8. Allocate d_qualities (flat array by spans)
             {
-                size_t alignment = alignof(decltype(dest.d_qualities[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_qualities = reinterpret_cast<char *>(base + offset);
+                size_t chunk_offset = src.h_qualities_ptr[src_offset].start;
                 chunk_sz = (src.h_qualities_ptr[src_offset + n_elements - 1].start +
                             src.h_qualities_ptr[src_offset + n_elements - 1].len) -
-                           (src.h_qualities_ptr[src_offset].start);
-                size_t chunk_offset = src.h_qualities_ptr[src_offset].start;
-                size_t qualities_data_size = sizeof(src.h_qualities[0]) * chunk_sz;
-                transfer_queue.memcpy(dest.d_qualities, src.h_qualities + chunk_offset, qualities_data_size);
-                actual_data_movement += qualities_data_size;
-                offset += qualities_data_size;
+                           src.h_qualities_ptr[src_offset].start;
+
+                dest.d_qualities =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_qualities + chunk_offset,   // src base
+                                   chunk_sz);                         // number of chars
+            }
+            // 9. Allocate d_rnext (array of int32_t)
+            {
+                dest.d_rnext =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_rnext + src_offset,
+                                   n_elements);
             }
 
-            // 6. Allocate d_qualities_ptr (an array of SpanField)
-            //            {
-            //                size_t alignment = alignof(decltype(dest.d_qualities_ptr[0]));
-            //                size_t padding = (alignment - (offset % alignment)) % alignment;
-            //                offset += padding;
-            //                dest.d_qualities_ptr = reinterpret_cast<SpanField *>(base + offset);
-            //                size_t qualities_ptr_size = sizeof(dest.d_qualities_ptr[0]) * n_elements;
-            //                transfer_queue.memcpy(dest.d_qualities_ptr, src.h_qualities_ptr + src_offset, qualities_ptr_size);
-            //
-            //                offset += qualities_ptr_size;
-            //            }
-
-            // 7. Allocate d_pos (an array of int64_t)
+            // 10. Allocate d_pnext (array of int32_t)
             {
-                size_t alignment = alignof(decltype(dest.d_pos[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_pos = reinterpret_cast<int64_t *>(base + offset);
-                size_t pos_data_size = sizeof(dest.d_pos[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_pos, src.h_pos + src_offset, pos_data_size);
-                actual_data_movement += pos_data_size;
-                offset += pos_data_size;
-            }
-            // 8. Allocate d_recalibrated (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_recalibrated[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_recalibrated = reinterpret_cast<int8_t *>(base + offset);
-                size_t recalibrated_data_size = sizeof(dest.d_recalibrated[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_recalibrated, src.h_recalibrated + src_offset,
-                                      recalibrated_data_size);
-                actual_data_movement += recalibrated_data_size;
-                offset += recalibrated_data_size;
-            }
-            // 9. Allocate d_rname (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_rname[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_rname = reinterpret_cast<int32_t*>(base + offset);
-                size_t rname_data_size = sizeof(dest.d_rname[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_rname, src.h_rname + src_offset, rname_data_size);
-                actual_data_movement += rname_data_size;
-                offset += rname_data_size;
-            }
-            // 10. Allocate d_flag (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_flag[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_flag = reinterpret_cast<uint16_t *>(base + offset);
-                size_t flag_data_size = sizeof(dest.d_flag[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_flag, src.h_flag + src_offset, flag_data_size);
-                actual_data_movement += flag_data_size;
-                offset += flag_data_size;
-            }
-            // 11. Allocate d_reads_group_covariate (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_reads_group_covariate[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_reads_group_covariate = reinterpret_cast<int32_t *>(base + offset);
-                size_t reads_group_covariate_data_size = sizeof(dest.d_reads_group_covariate[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_reads_group_covariate, src.h_read_group_cov + src_offset,
-                                      reads_group_covariate_data_size);
-                actual_data_movement += reads_group_covariate_data_size;
-                offset += reads_group_covariate_data_size;
-            }
-            // 12. Allocate d_skip_slice
-            {
-                size_t alignment = alignof(decltype(dest.d_skip_slice[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_skip_slice = reinterpret_cast<uint8_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t skip_slice_size = sizeof(dest.d_skip_slice[0]) * chunk_sz;
-                transfer_queue.fill(dest.d_skip_slice, static_cast<uint8_t>(0), chunk_sz);
-                offset += skip_slice_size;
+                dest.d_pnext =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_pnext + src_offset,
+                                   n_elements);
             }
 
-            // 14. Allocate d_snps
+            // 11. Allocate d_tlen (array of int32_t)
             {
-                size_t alignment = alignof(decltype(dest.d_snps[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_snps = reinterpret_cast<int8_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t snps_size = sizeof(dest.d_snps[0]) * chunk_sz;
-                transfer_queue.fill(dest.d_snps, static_cast<int8_t>(0), chunk_sz);
-                offset += snps_size;
+                dest.d_tlen =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_tlen + src_offset,
+                                   n_elements);
             }
 
-            // 16. Allocate d_stranded_seq (an array of char)
+            // 12. Allocate d_pos (array of int32_t)
             {
-                size_t alignment = alignof(decltype(dest.d_stranded_seq[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_stranded_seq = reinterpret_cast<char *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t stranded_seq_size = sizeof(dest.d_stranded_seq[0]) * chunk_sz;
+                dest.d_pos =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_pos + src_offset,
+                                   n_elements);
+            }
+
+            // 13. Allocate d_recalibrated (array of int8_t)
+            {
+                dest.d_recalibrated = reinterpret_cast<int8_t*>(
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_recalibrated + src_offset,
+                                   n_elements));
+            }
+
+            // 14. Allocate d_rname (array of int32_t)
+            {
+                dest.d_rname =
+                alloc_and_copy(transfer_queue, base, offset,
+                               src.h_rname + src_offset,
+                               n_elements);
+            }
+
+            // 15. Allocate d_flag (array of uint16_t)
+            {
+                dest.d_flag =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_flag + src_offset,
+                                   n_elements);
+            }
+
+            // 16. Allocate d_reads_group_covariate (array of int32_t)
+            {
+                dest.d_reads_group_covariate =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_read_group_cov + src_offset,
+                                   n_elements);
+            }
+
+            // 17. Allocate d_skip_slice (flat array sized like sequences slice; then fill 0)
+            {
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_skip_slice =
+                    alloc_simple<uint8_t>(base, offset, seq_chunk_sz);
+
+                // zero initialize
+                transfer_queue.fill(dest.d_skip_slice, static_cast<uint8_t>(0), seq_chunk_sz);
+            }
+
+            // 18. Allocate d_snps (same size as sequences slice; then fill 0)
+            {
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_snps =
+                    alloc_simple<int8_t>(base, offset, seq_chunk_sz);
+
+                transfer_queue.fill(dest.d_snps, static_cast<int8_t>(0), seq_chunk_sz);
+            }
+
+            // 19. Allocate d_stranded_seq (flat array by sequences spans)
+            {
                 size_t chunk_offset = src.h_sequences_ptr[src_offset].start;
-                transfer_queue.memcpy(dest.d_stranded_seq, src.h_sequences + chunk_offset, stranded_seq_size);
-                actual_data_movement += stranded_seq_size;
-                offset += stranded_seq_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_stranded_seq =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_sequences + chunk_offset,
+                                   seq_chunk_sz);
             }
 
-            // 17. Allocate d_stranded_seq_ptr (an array of SpanField)
+            // 20. Allocate d_stranded_seq_ptr (array of SpanField)
             {
-                size_t alignment = alignof(decltype(dest.d_stranded_seq_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_stranded_seq_ptr = reinterpret_cast<SpanField*>(base + offset);
-                size_t stranded_seq_ptr_size = sizeof(dest.d_stranded_seq_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_stranded_seq_ptr, src.h_sequences_ptr + src_offset,
-                                      stranded_seq_ptr_size);
-                actual_data_movement += stranded_seq_ptr_size;
-                offset += stranded_seq_ptr_size;
+                /*dest.d_stranded_seq_ptr =
+                    alloc_and_copy(transfer_queue, base, offset,
+                                   src.h_sequences_ptr + src_offset,
+                                   n_elements);*/
+                dest.d_stranded_seq_ptr = alloc_simple<SpanField>(base, offset, n_elements);
             }
 
-            // 18. Allocate d_base_context (an array of int32_t)
+            // 21. Allocate d_base_context (flat array sized like sequences slice; no copy now)
             {
-                size_t alignment = alignof(decltype(dest.d_base_context[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_base_context = reinterpret_cast<int32_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t base_context_size = sizeof(dest.d_base_context[0]) * chunk_sz;
-                offset += base_context_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_base_context = alloc_simple<int32_t>(base, offset, seq_chunk_sz);
             }
 
-            // 19. Allocate d_base_context_ptr (an array of SpanField)
+            // 22. Allocate d_base_context_ptr (array of SpanField)
             {
-                size_t alignment = alignof(decltype(dest.d_base_context_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_base_context_ptr = reinterpret_cast<SpanField *>(base + offset);
-                size_t base_context_ptr_size = sizeof(dest.d_base_context_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_base_context_ptr, src.h_sequences_ptr + src_offset, base_context_ptr_size);
-                actual_data_movement += base_context_ptr_size;
-                offset += base_context_ptr_size;
+                dest.d_base_context_ptr = alloc_simple<SpanField>(base, offset, n_elements);
             }
 
-            // 20. Allocate d_quality_table_indexes
+            // 23. Allocate d_quality_table_indexes (flat like sequences; no init/fill here)
             {
-                size_t alignment = alignof(decltype(dest.d_quality_table_indexes[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_quality_table_indexes = reinterpret_cast<int32_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t quality_table_indexes_size = sizeof(dest.d_quality_table_indexes[0]) * chunk_sz;
-                //transfer_queue.fill(dest.d_quality_table_indexes, static_cast<int32_t>(INVALID_INDEX), chunk_sz);
-                offset += quality_table_indexes_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_quality_table_indexes =
+                    alloc_simple<int32_t>(base, offset, seq_chunk_sz);
             }
 
-            // 21. Allocate d_cycle_table_indexes
+            // 24. Allocate d_cycle_table_indexes (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_cycle_table_indexes[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_cycle_table_indexes = reinterpret_cast<int32_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t cycle_table_indexes_size = sizeof(dest.d_cycle_table_indexes[0]) * chunk_sz;
-                offset += cycle_table_indexes_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_cycle_table_indexes =
+                    alloc_simple<int32_t>(base, offset, seq_chunk_sz);
             }
 
-            // 22. Allocate d_context_table_indexes
+            // 25. Allocate d_context_table_indexes (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_context_table_indexes[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_context_table_indexes = reinterpret_cast<int32_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t context_table_indexes_size = sizeof(dest.d_context_table_indexes[0]) * chunk_sz;
-                offset += context_table_indexes_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_context_table_indexes =
+                    alloc_simple<int32_t>(base, offset, seq_chunk_sz);
             }
 
-            // 23. Allocate d_quality_table_vals
+            // 26. Allocate d_quality_table_vals (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_quality_table_vals[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_quality_table_vals = reinterpret_cast<val_t*>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t quality_table_vals_size = sizeof(dest.d_quality_table_vals[0]) * chunk_sz;
-                offset += quality_table_vals_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_quality_table_vals =
+                    alloc_simple<val_t>(base, offset, seq_chunk_sz);
             }
 
-            // 24. Allocate d_cycle_table_vals
+            // 27. Allocate d_cycle_table_vals (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_cycle_table_vals[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_cycle_table_vals = reinterpret_cast<val_t*>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t cycle_table_vals_size = sizeof(dest.d_cycle_table_vals[0]) * chunk_sz;
-                offset += cycle_table_vals_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_cycle_table_vals =
+                    alloc_simple<val_t>(base, offset, seq_chunk_sz);
             }
 
-            // 25. Allocate d_context_table_vals
+            // 28. Allocate d_context_table_vals (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_context_table_vals[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_context_table_vals = reinterpret_cast<val_t*>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t context_table_vals_size = sizeof(dest.d_context_table_vals[0]) * chunk_sz;
-                offset += context_table_vals_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_context_table_vals =
+                    alloc_simple<val_t>(base, offset, seq_chunk_sz);
             }
 
-            // 26. Allocate d_segments_quality
+            /*// 29. Allocate d_segments_quality (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_segments_quality[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_segments_quality = reinterpret_cast<segment_t*>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t segments_size = sizeof(dest.d_segments_quality[0]) * chunk_sz;
-                offset += segments_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_segments_quality =
+                    alloc_simple<segment_t>(base, offset, seq_chunk_sz);
             }
-            // 27. Allocate d_segments_cycle
+
+            // 30. Allocate d_segments_cycle (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_segments_cycle[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_segments_cycle = reinterpret_cast<segment_t*>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t segments_size = sizeof(dest.d_segments_cycle[0]) * chunk_sz;
-                offset += segments_size;
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_segments_cycle =
+                    alloc_simple<segment_t>(base, offset, seq_chunk_sz);
             }
-            // 28. Allocate d_segments_context
+
+            // 31. Allocate d_segments_context (flat like sequences)
             {
-                size_t alignment = alignof(decltype(dest.d_segments_context[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_segments_context = reinterpret_cast<segment_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t segments_size = sizeof(dest.d_segments_context[0]) * chunk_sz;
-                offset += segments_size;
-            }
-            // 28. Allocate d_temporary_segments_offsets, capped at 2 BILLIONS
+                size_t seq_chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                                       src.h_sequences_ptr[src_offset + n_elements - 1].len) -
+                                      src.h_sequences_ptr[src_offset].start;
+
+                dest.d_segments_context =
+                    alloc_simple<segment_t>(base, offset, seq_chunk_sz);
+            }*/
+
+            // 32. Allocate d_temporary_segments_sequences_offsets (capped)
             {
-                size_t alignment = alignof(decltype(dest.d_temporary_segments_sequences_offsets[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_temporary_segments_sequences_offsets = reinterpret_cast<int32_t*>(base + offset);
-                size_t tmp_chunk_sz = n_elements;
-                chunk_sz = std::min(tmp_chunk_sz, syclgal_mergesort::MAX_NUM_ELEMENTS);
-                size_t segments_size = sizeof(dest.d_temporary_segments_sequences_offsets[0]) * chunk_sz;
-                offset += segments_size;
+                size_t tmp_elems = n_elements;
+                dest.d_temporary_segments_sequences_offsets =
+                    alloc_simple<int32_t>(base, offset, tmp_elems);
             }
+
+
             dest.table_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
                                         src.h_sequences_ptr[src_offset + n_elements - 1].len) -
                                        src.h_sequences_ptr[src_offset].start;
 
-            // other temporary arrays
-            {
-                size_t alignment = alignof(decltype(dest.d_read_index[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_read_index = reinterpret_cast<int32_t*>(base + offset);
-                // chunk_sz = (src.h_cigar_start[src_offset + n_elements - 1] +
-                   //         src.h_cigar_len[src_offset + n_elements - 1] + 1) - (src.h_cigar_start[src_offset]);
-                chunk_sz = (n_elements + 1);
-                size_t cigar_data_size = sizeof(dest.d_read_index[0]) * chunk_sz;
-                offset += cigar_data_size;
-                dest._n_expanded_cigar_ops = chunk_sz;
-            }
-            {
-
-                size_t alignment = alignof(decltype(dest.d_i_offset[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_i_offset = reinterpret_cast<int32_t*>(base + offset);
-                size_t i_off_size = sizeof(dest.d_i_offset[0]) * chunk_sz;
-                offset += i_off_size;
-            }
-            {
-                size_t alignment = alignof(decltype(dest.d_j_offset[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_j_offset = reinterpret_cast<int32_t*>(base + offset);
-                size_t j_off_size = sizeof(dest.d_j_offset[0]) * chunk_sz;
-                offset += j_off_size;
-            }
-
         }
-        if (offset >= dest.max_memory) {
-            Logger::getLogger().log(LOG_ERROR, "hardClipCigar: allocated (", offset, ") exceeds max memory (", dest.max_memory, ")\n");
-            std::abort(); // clean abort with stacktrace (better than exit)
+        if (offset > dest.max_memory) {
+            Logger::getLogger().log(LOG_ERROR, "ComputeCovariateVecotrsData: allocated (", offset, ") exceeds max memory (", dest.max_memory, ")\n");
+            std::abort();
         }
-        dest.max_num_elements = bqsr_covariate_vector_kernel::update_batch_num_elements(src, dest, src_offset + n_elements);
         transfer_queue.wait_and_throw();
-        Logger::getLogger().log(LOG_DEBUG, "    \tActual data movement: ", actual_data_movement, " bytes out of ", offset, " bytes allocated");
+
         Logger::getLogger().log(LOG_DEBUG, "    \tActual number of reads in batch: ", dest.max_num_elements);
     } catch (sycl::exception& e) {
         Logger::getLogger().log(LOG_ERROR, "Error during memory copy from host to device: ", e.what());
@@ -604,155 +517,53 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
 void ComputeSkipSliceKernelData::memcpy_dev_to_host(sycl::queue &transfer_queue, TablesOutput &dest, size_t dest_offset,
                                                     ComputeSkipSliceKernelData &src, size_t src_offset,
                                                     size_t n_elements) {
-    // std::vector<int32_t> tmp_vals(src.table_sz, 0);
-    // std::vector<SpanField> tmp_span(src.max_num_elements);
-    // transfer_queue.memcpy(tmp_vals.data(), src.d_quality_table_indexes, sizeof(src.d_quality_table_indexes[0])*src.table_sz);
-    // transfer_queue.memcpy(tmp_span.data(), src.d_sequences_ptr, sizeof(src.d_sequences_ptr[0])*src.max_num_elements);
-    // transfer_queue.wait_and_throw();
 
-    /*
-    for (size_t i = 0; i < src.max_num_elements; i++) {
-        for (size_t j = 0; j < tmp_span[i].len; j++) {
-            if (tmp_vals[tmp_span[i].start + j] != 1) {
-                std::cout << "ERROR" << std::endl;
-            }
-        }
-    }*/
-    // for (size_t j = 0; j < src.max_num_elements; j++) {
-    //     for (size_t i = tmp_span[j].start; i < tmp_span[j].start + tmp_span[j].len; i++) {
-    //         if (tmp_vals[i] != 1) {
-    //         //if (tmp_vals[i] != j) {
-    //             std::cout << "ERROR" << std::endl;
-    //         }
-    //     }
-    // }
-//    Timer t;
-//    //Logger::getLogger().log(LOG_INFO, "Updating tables");
-//    size_t num_segments = src.num_segments_quality;
-//    auto d_quality_table_indexes = src.d_quality_table_indexes;
-//    auto d_quality_table_vals = src.d_quality_table_vals;
-//    auto d_segments_quality = src.d_segments_quality;
-//
-//    auto d_quality_table = dest.d_quality_table;
-//
-//    if (num_segments > 1) {
-//
-//        transfer_queue.parallel_for(sycl::range<1>(num_segments - 1), [=](sycl::id<1> segment_idx) {
-//
-//            int32_t covariate_idx = d_quality_table_indexes[segment_idx];
-//            int32_t err_val = d_quality_table_vals[segment_idx];
-//            int32_t segment_sz = d_segments_quality[segment_idx + 1] - d_segments_quality[segment_idx];
-//
-//            if (covariate_idx == INVALID_INDEX) {
-//                return;
-//            }
-//            if (d_quality_table[covariate_idx].Observations == -1) {
-//                d_quality_table[covariate_idx].Observations = 0;
-//            }
-//            d_quality_table[covariate_idx].Mismatches += err_val;
-//            d_quality_table[covariate_idx].Observations += segment_sz;
-//        });
-//    }
-//
-//    num_segments = src.num_segments_cycle;
-//    auto d_cycle_table_indexes = src.d_cycle_table_indexes;
-//    auto d_cycle_table_vals = src.d_cycle_table_vals;
-//    auto d_segments_cycle = src.d_segments_cycle;
-//
-//    auto d_cycle_table = dest.d_cycle_table;
-//    if (num_segments > 1) {
-//        transfer_queue.parallel_for(sycl::range<1>(num_segments - 1), [=](sycl::id<1> segment_idx) {
-//
-//            int32_t covariate_idx = d_cycle_table_indexes[segment_idx];
-//            int32_t err_val = d_cycle_table_vals[segment_idx];
-//            int32_t segment_sz = d_segments_cycle[segment_idx + 1] - d_segments_cycle[segment_idx];
-//
-//            if (covariate_idx == INVALID_INDEX) {
-//                return;
-//            }
-//            if (d_cycle_table[covariate_idx].Observations == -1) {
-//                d_cycle_table[covariate_idx].Observations = 0;
-//            }
-//            d_cycle_table[covariate_idx].Mismatches += err_val;
-//            d_cycle_table[covariate_idx].Observations += segment_sz;
-//        });
-//    }
-//
-//    num_segments = src.num_segments_context;
-//    auto d_context_table_indexes = src.d_context_table_indexes;
-//    auto d_context_table_vals = src.d_context_table_vals;
-//    auto d_segments_context = src.d_segments_context;
-//
-//    auto d_context_table = dest.d_context_table;
-//    if (num_segments > 1) {
-//
-//        transfer_queue.parallel_for(sycl::range<1>(num_segments - 1), [=](sycl::id<1> segment_idx) {
-//
-//            int32_t covariate_idx = d_context_table_indexes[segment_idx];
-//            int32_t err_val = d_context_table_vals[segment_idx];
-//            int32_t segment_sz = d_segments_context[segment_idx + 1] - d_segments_context[segment_idx];
-//
-//            if (covariate_idx == INVALID_INDEX) {
-//                return;
-//            }
-//            if (d_context_table[covariate_idx].Observations == -1) {
-//                d_context_table[covariate_idx].Observations = 0;
-//            }
-//            d_context_table[covariate_idx].Mismatches += err_val;
-//            d_context_table[covariate_idx].Observations += segment_sz;
-//        });
-//    }
-//    transfer_queue.wait_and_throw();
-    //Logger::getLogger().log(LOG_INFO, "    [UpdateTables kernels] Time: " + std::to_string(t.elapsed()) + " sec");
-    //dest.table_offset += src.table_sz;
 }
 
+//[[clang::optnone]]
+size_t bqsr_covariate_vector_kernel::update_batch_num_elements(const SequencesInput& in, const ComputeSkipSliceKernelData& kd, size_t start_idx) {
+    if (start_idx >= in._n) return 0;
 
-size_t bqsr_covariate_vector_kernel::update_batch_num_elements(const SequencesInput& in, const ComputeSkipSliceKernelData& kernel_data, size_t start_idx) {
-    size_t n_elements = 1;
-    size_t idx = start_idx + n_elements;
-    //size_t base = 0;
+    const size_t Nmax = in._n - start_idx;
 
-    if (idx > in._n) {
-        return 0;
-    }
-    size_t offset = compute_chunk_sz(in, kernel_data, start_idx, n_elements);
-
-    while (offset < kernel_data.max_memory && idx < in._n) {
-        n_elements = min(n_elements * 2, in._n-start_idx);
-        offset = compute_chunk_sz(in, kernel_data, start_idx, n_elements);
-        idx = start_idx + n_elements;
+    // 1) Probe: can 1 element fit at all?
+    size_t usage = compute_chunk_sz(in, kd, start_idx, 1);
+    if (usage > kd.max_memory) {
+        return 0;  // caller MUST handle n==0 (no indexing with n-1!)
     }
 
-    // At this point, n_elements is an upper bound that may exceed memory.
-    // Set up binary search between [low, high], where:
-    //   low = n_elements/2 (last count that fit) and high = n_elements.
-    size_t low = n_elements / 2;
-    size_t high = n_elements;
-    size_t best = low;  // best so far that fits.
-    size_t usage = 0;
-
-    while (low <= high) {
-        size_t mid = low + (high - low) / 2;
-        if (start_idx + mid > in._n) {  // avoid going out of bounds
-            if (mid==0) continue;
-            high = mid - 1;
-            continue;
-        }
-        usage = compute_chunk_sz(in, kernel_data, start_idx, mid);
-        if (usage < kernel_data.max_memory) {
-            best = mid;    // mid fits within the memory
-            low = mid + 1; // try for more elements
+    // 2) Exponential search for an upper bound that DOESN'T fit
+    size_t best = 1;   // last known good (fits)
+    size_t high = 1;
+    while (true) {
+        size_t next = std::min(high * 2, Nmax);
+        usage = compute_chunk_sz(in, kd, start_idx, next);
+        if (usage <= kd.max_memory) {
+            best = next;
+            if (next == Nmax) { high = next; break; } // exhausted
+            high = next;
         } else {
-            if (mid==0) continue;
-            high = mid - 1;
+            // first non-fitting count is our upper bound
+            high = next;
+            break;
         }
     }
-    usage = compute_chunk_sz(in, kernel_data, start_idx, best);
-    n_elements = best;
-    return n_elements;
-}
 
+    // 3) Binary search in [best, high] for the max that fits.
+    // Invariant: best fits; high may or may not fit.
+    size_t low = best;
+    while (low < high) {
+        size_t mid = low + (high - low + 1) / 2; // upper mid to avoid infinite loop
+        usage = compute_chunk_sz(in, kd, start_idx, mid);
+        if (usage <= kd.max_memory) {
+            low = mid;   // mid fits → move up
+        } else {
+            high = mid - 1; // mid doesn't fit → move down
+        }
+    }
+    return low;  // >= 1 here
+}
+//[[clang::optnone]]
 size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelData& kernel_data, size_t start_idx, size_t n_elements) {
     // When we compute this, we need to keep into account two things:
     // + The memory alignment of each pointer
@@ -765,333 +576,108 @@ size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelDa
     size_t chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
                        in.h_sequences_ptr[start_idx + n_elements - 1].len) -
                       (in.h_sequences_ptr[start_idx].start);
-    size_t sequences_data_size = sizeof(in.h_sequences[0]) * chunk_sz;
-    offset += sequences_data_size;
+    simulate_alloc<decltype(in.h_sequences[0])>(offset, chunk_sz);
 
     // 2. d_sequences_ptr (an array of SpanField)
-    //    Align the pointer properly.
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_sequences_ptr[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t sequences_ptr_size = sizeof(kernel_data.d_sequences_ptr[0]) * n_elements;
-        offset += sequences_ptr_size;
-    }
+    simulate_alloc<decltype(kernel_data.d_sequences_ptr[0])>(offset, n_elements);
+
     // 3. d_cigar (an array of CigarOperation)
+    chunk_sz = (in.h_cigar_ptr[start_idx + n_elements - 1].start +
+                in.h_cigar_ptr[start_idx + n_elements - 1].len) -
+               in.h_cigar_ptr[start_idx].start;
+    simulate_alloc<decltype(kernel_data.d_cigar[0])>(offset, chunk_sz);
+
+    // Cigar Span
+    simulate_alloc<decltype(kernel_data.d_cigar_ptr[0])>(offset, n_elements);
+
+    // Clipped cigar  (capacity = contiguous_ops + PAD * n_elements)
     {
-        size_t alignment = alignof(decltype(kernel_data.d_cigar[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_cigar_start[start_idx + n_elements - 1] +
-                    in.h_cigar_len[start_idx + n_elements - 1]) - (in.h_cigar_start[start_idx]);
-        size_t cigar_data_size = sizeof(in.h_cigar[0]) * chunk_sz;
-        offset += cigar_data_size;
+        const size_t first    = in.h_cigar_ptr[start_idx].start;
+        const size_t last_end = in.h_cigar_ptr[start_idx + n_elements - 1].start +
+                                in.h_cigar_ptr[start_idx + n_elements - 1].len;
+        const size_t contig_ops = last_end - first;
+        const size_t clipped_cap = contig_ops + PAD * n_elements;
+        simulate_alloc<decltype(kernel_data.d_clipped_cigar[0])>(offset, clipped_cap);
     }
 
-    // 4.1 d_cigar_ptr (an array of SpanField)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_cigar_start[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t cigar_ptr_size = sizeof(kernel_data.d_cigar_start[0]) * n_elements;
-        offset += cigar_ptr_size;
-    }
-    // 4.2 d_cigar_ptr (an array of SpanField)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_cigar_len[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t cigar_ptr_size = sizeof(kernel_data.d_cigar_len[0]) * n_elements;
-        offset += cigar_ptr_size;
-    }
+    // 4.1 d_clipped_cigar_start (array)
+    simulate_alloc<decltype(kernel_data.d_clipped_cigar_start[0])>(offset, n_elements);
 
-    // 5. d_qualities (an array of char)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_qualities[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_qualities_ptr[start_idx + n_elements - 1].start +
-                    in.h_qualities_ptr[start_idx + n_elements - 1].len) -
-                   (in.h_qualities_ptr[start_idx].start);
-        size_t qualities_data_size = sizeof(in.h_qualities[0]) * chunk_sz;
-        offset += qualities_data_size;
-    }
+    // 4.2 d_clipped_cigar_len (array)
+    simulate_alloc<decltype(kernel_data.d_clipped_cigar_len[0])>(offset, n_elements);
 
-    // 6. d_qualities_ptr (an array of SpanField)
-//    {
-//        size_t alignment = alignof(decltype(kernel_data.d_qualities_ptr[0]));
-//        size_t padding = (alignment - (offset % alignment)) % alignment;
-//        offset += padding;
-//        size_t qualities_ptr_size = sizeof(kernel_data.d_qualities_ptr[0]) * n_elements;
-//        offset += qualities_ptr_size;
-//    }
+    // 5. d_qualities (flat by spans)
+    chunk_sz = (in.h_qualities_ptr[start_idx + n_elements - 1].start +
+                in.h_qualities_ptr[start_idx + n_elements - 1].len) -
+               in.h_qualities_ptr[start_idx].start;
+    simulate_alloc<decltype(kernel_data.d_qualities[0])>(offset, chunk_sz);
 
-    // 7. d_pos (an array of int64_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_pos[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t pos_data_size = sizeof(kernel_data.d_pos[0]) * n_elements;
-        offset += pos_data_size;
-    }
-    // 8. d_recalibrated (an array of int8_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_recalibrated[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t recalibrated_data_size = sizeof(kernel_data.d_recalibrated[0]) * n_elements;
-        offset += recalibrated_data_size;
-    }
-    // 9. d_rname (an array of int8_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_rname[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t rname_data_size = sizeof(kernel_data.d_rname[0]) * n_elements;
-        offset += rname_data_size;
-    }
-    // 10. d_flag (an array of int8_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_flag[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t flag_data_size = sizeof(kernel_data.d_flag[0]) * n_elements;
-        offset += flag_data_size;
-    }
-    // 11. d_reads_group_covariate (an array of int8_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_reads_group_covariate[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t reads_group_covariate_data_size = sizeof(kernel_data.d_reads_group_covariate[0]) * n_elements;
-        offset += reads_group_covariate_data_size;
-    }
-    // 12. d_skip_slice
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_skip_slice[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t skip_slice_size = sizeof(kernel_data.d_skip_slice[0]) * chunk_sz;
-        offset += skip_slice_size;
-    }
+    // 6. d_rnext / d_pnext / d_tlen (per-read)
+    simulate_alloc<decltype(kernel_data.d_rnext[0])>(offset, n_elements);
+    simulate_alloc<decltype(kernel_data.d_pnext[0])>(offset, n_elements);
+    simulate_alloc<decltype(kernel_data.d_tlen[0])>(offset, n_elements);
 
-    // 13. d_skip_slice_ptr (an array of SpanField)
-//    {
-//        size_t alignment = alignof(decltype(kernel_data.d_skip_slice_ptr[0]));
-//        size_t padding = (alignment - (offset % alignment)) % alignment;
-//        offset += padding;
-//        size_t skip_slice_ptr_size = sizeof(kernel_data.d_skip_slice_ptr[0]) * n_elements;
-//        offset += skip_slice_ptr_size;
-//    }
+    // 7. d_pos (per-read)
+    simulate_alloc<decltype(kernel_data.d_pos[0])>(offset, n_elements);
 
-    // 14. d_snps
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_snps[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t snps_size = sizeof(kernel_data.d_snps[0]) * chunk_sz;
-        offset += snps_size;
-    }
+    // 8. d_recalibrated (per-read)
+    simulate_alloc<decltype(kernel_data.d_recalibrated[0])>(offset, n_elements);
 
-    // 15. d_snps_ptr (an array of SpanField)
-//    {
-//        size_t alignment = alignof(decltype(kernel_data.d_snps_ptr[0]));
-//        size_t padding = (alignment - (offset % alignment)) % alignment;
-//        offset += padding;
-//        size_t snps_ptr_size = sizeof(kernel_data.d_snps_ptr[0]) * n_elements;
-//        offset += snps_ptr_size;
-//    }
+    // 9. d_rname (per-read)
+    simulate_alloc<decltype(kernel_data.d_rname[0])>(offset, n_elements);
 
-    // 16. d_stranded_seq (an array of char)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_stranded_seq[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t stranded_seq_size = sizeof(kernel_data.d_stranded_seq[0]) * chunk_sz;
-        offset += stranded_seq_size;
-    }
+    // 10. d_flag (per-read)
+    simulate_alloc<decltype(kernel_data.d_flag[0])>(offset, n_elements);
 
-    // 17. d_stranded_seq_ptr (an array of SpanField)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_stranded_seq_ptr[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t stranded_seq_ptr_size = sizeof(kernel_data.d_stranded_seq_ptr[0]) * n_elements;
-        offset += stranded_seq_ptr_size;
-    }
+    // 11. d_reads_group_covariate (per-read)
+    simulate_alloc<decltype(kernel_data.d_reads_group_covariate[0])>(offset, n_elements);
 
-    // 18. d_base_context (an array of int32_t)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_base_context[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t base_context_size = sizeof(kernel_data.d_base_context[0]) * chunk_sz;
-        offset += base_context_size;
-    }
+    // 12. d_skip_slice (per-base like sequences)
+    const size_t seq_chunk =
+        (in.h_sequences_ptr[start_idx + n_elements - 1].start +
+         in.h_sequences_ptr[start_idx + n_elements - 1].len) -
+        in.h_sequences_ptr[start_idx].start;
+    simulate_alloc<decltype(kernel_data.d_skip_slice[0])>(offset, seq_chunk);
 
-    // 19. d_base_context_ptr (an array of SpanField)
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_base_context_ptr[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t base_context_ptr_size = sizeof(kernel_data.d_base_context_ptr[0]) * n_elements;
-        offset += base_context_ptr_size;
-    }
+    // 14. d_snps (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_snps[0])>(offset, seq_chunk);
 
-    // 20. d_quality_table_indexes
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_quality_table_indexes[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t quality_table_indexes_size = sizeof(kernel_data.d_quality_table_indexes[0]) * chunk_sz;
-        offset += quality_table_indexes_size;
-        //extra_table_indexes_sz = quality_table_indexes_size;
-    }
+    // 16. d_stranded_seq (per-base chars, like sequences)
+    simulate_alloc<decltype(kernel_data.d_stranded_seq[0])>(offset, seq_chunk);
 
-    // 21. d_cycle_table_indexes
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_cycle_table_indexes[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t cycle_table_indexes_size = sizeof(kernel_data.d_cycle_table_indexes[0]) * chunk_sz;
-        offset += cycle_table_indexes_size;
-    }
+    // 17. d_stranded_seq_ptr (per-read)
+    simulate_alloc<decltype(kernel_data.d_stranded_seq_ptr[0])>(offset, n_elements);
 
-    // 22. d_context_table_indexes
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_context_table_indexes[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t context_table_indexes_size = sizeof(kernel_data.d_context_table_indexes[0]) * chunk_sz;
-        offset += context_table_indexes_size;
-    }
+    // 18. d_base_context (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_base_context[0])>(offset, seq_chunk);
 
-    // 23. d_quality_table_vals
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_quality_table_vals[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t quality_table_vals_size = sizeof(kernel_data.d_quality_table_vals[0]) * chunk_sz;
-        offset += quality_table_vals_size;
-        //extra_table_values_sz = quality_table_vals_size;
-    }
+    // 19. d_base_context_ptr (per-read)
+    simulate_alloc<decltype(kernel_data.d_base_context_ptr[0])>(offset, n_elements);
 
-    // 24. d_cycle_table_vals
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_cycle_table_vals[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t cycle_table_vals_size = sizeof(kernel_data.d_cycle_table_vals[0]) * chunk_sz;
-        offset += cycle_table_vals_size;
-    }
+    // 20. d_quality_table_indexes (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_quality_table_indexes[0])>(offset, seq_chunk);
 
-    // 25. d_context_table_vals
-    //size_t table_indexes_sz = 0;
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_context_table_vals[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t context_table_vals_size = sizeof(kernel_data.d_context_table_vals[0]) * chunk_sz;
-        offset += context_table_vals_size;
-    }
-    // add the memory for temporary segment sequences offsets
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_temporary_segments_sequences_offsets[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = n_elements;
-        size_t segments_size = sizeof(kernel_data.d_temporary_segments_sequences_offsets[0]) * chunk_sz;
-        offset += segments_size;
-    }
-    // add the memory for segments 1
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_segments_quality[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t segments_size = sizeof(kernel_data.d_segments_quality[0]) * chunk_sz;
-        offset += segments_size;
-    }
-    //  // add the memory for segments 2
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_segments_cycle[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t segments_size = sizeof(kernel_data.d_segments_cycle[0]) * chunk_sz;
-        offset += segments_size;
-    }
-    // add the memory for segments 3
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_segments_context[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                    in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                   in.h_sequences_ptr[start_idx].start;
-        size_t segments_size = sizeof(kernel_data.d_segments_context[0]) * chunk_sz;
-        offset += segments_size;
-    }
+    // 21. d_cycle_table_indexes (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_cycle_table_indexes[0])>(offset, seq_chunk);
 
-    // d_cigar_segments
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_read_index[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
+    // 22. d_context_table_indexes (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_context_table_indexes[0])>(offset, seq_chunk);
 
-        size_t cigar_data_size = sizeof(kernel_data.d_read_index[0]) * (n_elements + 1);
-        offset += cigar_data_size;
-    }
-    {
-        chunk_sz = (in.h_cigar_start[start_idx + n_elements - 1] +
-                    in.h_cigar_len[start_idx + n_elements - 1]) - (in.h_cigar_start[start_idx]);
-        size_t alignment = alignof(decltype(kernel_data.d_i_offset[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t i_offset_size = sizeof(kernel_data.d_i_offset[0]) * chunk_sz;
-        offset += i_offset_size;
-    }
-    {
-        size_t alignment = alignof(decltype(kernel_data.d_j_offset[0]));
-        size_t padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t j_offset_size = sizeof(kernel_data.d_j_offset[0]) * chunk_sz;
-        offset += j_offset_size;
-    }
+    // 23. d_quality_table_vals (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_quality_table_vals[0])>(offset, seq_chunk);
 
+    // 24. d_cycle_table_vals (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_cycle_table_vals[0])>(offset, seq_chunk);
+
+    // 25. d_context_table_vals (per-base like sequences)
+    simulate_alloc<decltype(kernel_data.d_context_table_vals[0])>(offset, seq_chunk);
+
+    // Temporary segment sequences offsets (per-read; cap if you need)
+    simulate_alloc<decltype(kernel_data.d_temporary_segments_sequences_offsets[0])>(offset, n_elements);
+
+    // Segments (per-base like sequences)
+    /*simulate_alloc<decltype(kernel_data.d_segments_quality[0])>(offset, seq_chunk);
+    simulate_alloc<decltype(kernel_data.d_segments_cycle[0])>(offset, seq_chunk);
+    simulate_alloc<decltype(kernel_data.d_segments_context[0])>(offset, seq_chunk);*/
     return offset;
 }

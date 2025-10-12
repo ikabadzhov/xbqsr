@@ -12,6 +12,8 @@
 typedef int32_t val_t;
 typedef int32_t segment_t;
 
+const size_t PAD = 8;
+
 class TablesOutput : public OutputData {
 public:
 //    int32_t* h_quality_table_indexes;
@@ -39,13 +41,19 @@ public:
     SpanField* h_sequences_ptr;
 
     CigarOperation* h_cigar;
+    SpanField* h_cigar_ptr;
+
     size_t* h_cigar_start;
     uint16_t* h_cigar_len;
 
     char* h_qualities;
     SpanField* h_qualities_ptr;
 
-    int64_t* h_pos;
+    int32_t* h_rnext = nullptr;
+    int32_t* h_pnext = nullptr;
+    int32_t* h_tlen = nullptr;
+
+    int32_t* h_pos;
     uint16_t* h_flag;
     int32_t* h_read_group_cov;
     int32_t* h_rname;
@@ -62,7 +70,7 @@ public:
     size_t s_context_table_sz;
 
 
-    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, size_t* cigar_start, uint16_t* cigar_len, int64_t* pos, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
+    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
  };
 
 
@@ -75,6 +83,8 @@ public:
     size_t reference_ptr_memory = 0;
     size_t max_n_elements_first_batch = 0;
 };
+
+
 
 class ComputeSkipSliceKernelData {
 public:
@@ -100,13 +110,19 @@ public:
     SpanField* d_sequences_ptr = nullptr;
 
     CigarOperation* d_cigar = nullptr;
-    size_t* d_cigar_start = nullptr;
-    uint16_t* d_cigar_len = nullptr;
+    CigarOperation* d_clipped_cigar = nullptr;
+    SpanField* d_cigar_ptr = nullptr;
+    size_t* d_clipped_cigar_start = nullptr;
+    uint16_t* d_clipped_cigar_len = nullptr;
 
     char* d_qualities = nullptr;
 
-    int64_t* d_pos = nullptr;
+    int32_t* d_pos = nullptr;
     int32_t* d_rname = nullptr;
+    int32_t* d_rnext = nullptr;
+    int32_t* d_pnext = nullptr;
+    int32_t* d_tlen = nullptr;
+
     int8_t* d_recalibrated = nullptr;
     uint16_t* d_flag = nullptr;
     int32_t* d_reads_group_covariate = nullptr;
@@ -130,9 +146,9 @@ public:
     val_t* d_cycle_table_vals = nullptr;
     val_t* d_context_table_vals = nullptr;
 
-    segment_t* d_segments_quality = nullptr;
-    segment_t* d_segments_cycle = nullptr;
-    segment_t* d_segments_context = nullptr;
+    // segment_t* d_segments_quality = nullptr;
+    // segment_t* d_segments_cycle = nullptr;
+    // segment_t* d_segments_context = nullptr;
 
 //    key_t* d_temporary_keys = nullptr;
 //    val_t* d_temporary_vals = nullptr;
@@ -148,10 +164,6 @@ public:
     size_t d_quality_table_sz = 0;
     size_t d_cycle_table_sz = 0;
     size_t d_context_table_sz = 0;
-
-    int32_t* d_read_index = nullptr;
-    int32_t* d_i_offset = nullptr;
-    int32_t* d_j_offset = nullptr;
 
     size_t _n_expanded_cigar_ops = 0;
 
@@ -208,11 +220,24 @@ public:
 
     static void memcpy_dev_to_host(sycl::queue& transfer_queue, TablesOutput& dest, size_t dest_offset, ComputeSkipSliceKernelData& src,
                                    size_t src_offset, size_t n_elements);
+
+    template <typename InputT>
+    static size_t compute_max_elements(const InputT& in,
+                                      const ComputeSkipSliceKernelData& kd,
+                                      size_t start_idx);
 };
 
 namespace bqsr_covariate_vector_kernel {
-    size_t update_batch_num_elements(const SequencesInput &in, const ComputeSkipSliceKernelData &kernel_data,
+    size_t update_batch_num_elements(const SequencesInput &in, const ComputeSkipSliceKernelData &kd,
                                      size_t start_idx);
 }
+
+template<typename InputT>
+size_t ComputeSkipSliceKernelData::compute_max_elements(const InputT &in, const ComputeSkipSliceKernelData &kd,
+    size_t start_idx) {
+    return bqsr_covariate_vector_kernel::update_batch_num_elements(in, kd, start_idx);
+}
+
+
 
 #endif //GENOMICPIPELINE_COMPUTECOVARIATEVECTORSDATA_H

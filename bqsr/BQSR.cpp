@@ -143,7 +143,7 @@ char simpleBaseIndexToBase( int32_t baseIndex ) {
             exit(-1);
     }
 }
-
+//[[clang::optnone]]
 std::string keyToString(int32_t key) {
     auto length = static_cast<int32_t>(key & 0xF);
     int32_t realKey = key >> 4;
@@ -154,8 +154,8 @@ std::string keyToString(int32_t key) {
     }
 
     if( realKey != 0 ){
-        cout<<"invalid key"<<std::endl;
-        exit(-1);
+        Logger::getLogger().log(LOG_FATAL, "keyToString(): invalid key");
+        abort();
     }
     return result;
 }
@@ -356,7 +356,7 @@ void BaseRecalibrator::close() {
 
 std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
 
-    std::string rg = hdr.getReadGroupRecord().getString(reads.TAGS.RG.Get(idx));
+    std::string rg = hdr.getReadGroupRecord().getString(reads.TAGS.RG[idx]);
     if(!rg.empty()){
 
         for( auto& record : hdr.getReadGroupRecord().getAll() ){
@@ -383,54 +383,6 @@ std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
     }
 }
 
-// Inputs:
-//   src_cigar : flat CIGAR buffer (CigarOperation[])
-//   src_ptrs  : vector<SpanField> with {start,len} per read
-// Outputs (preallocated):
-//   cigar     : vector<CigarOperation> sized: sum(len) + 8*n_reads
-//   cigar_ptr : vector<SpanField> size n_reads
-
-void parallel_copy_cigar_with_padding(CigarOperation* src_cigar,
-                                      const std::vector<SpanField>& src_ptrs,
-                                      std::vector<CigarOperation>& cigar,
-                                      std::vector<SpanField>& cigar_ptr, size_t PAD)
-{
-    const size_t n_reads = src_ptrs.size();
-    if (n_reads == 0) return;
-
-    // 1) Build per-read sizes with padding (len + PAD).
-    std::vector<size_t> sizes_with_pad(n_reads);
-    tbb::parallel_for (0UL, n_reads, [&](size_t i) {
-        sizes_with_pad[i] = static_cast<size_t>(src_ptrs[i].len) + PAD;
-    });
-
-    // 2) Compute destination starts (exclusive scan).
-    std::vector<size_t> dst_start(n_reads);
-    std::exclusive_scan(std::execution::par, sizes_with_pad.begin(), sizes_with_pad.end(),
-                        dst_start.begin(), size_t{0});
-
-    // Optional sanity: total expected capacity equals current output size.
-    const size_t expected = dst_start.back() + sizes_with_pad.back();
-    assert(expected == cigar.size() && "Output 'cigar' must be preallocated to sum(len)+PAD*n_reads");
-    assert(cigar_ptr.size() == n_reads);
-
-    // 3) Parallel copy each read into its disjoint slice and set spans.
-    tbb::parallel_for(size_t(0), n_reads, [&](size_t i) {
-        const size_t s   = static_cast<size_t>(src_ptrs[i].start);
-        const size_t len = static_cast<size_t>(src_ptrs[i].len);
-        const size_t dst = dst_start[i];
-
-        // Copy CIGAR ops
-        std::memcpy(&cigar[dst], &src_cigar[s], len * sizeof(CigarOperation));
-
-        // Record span (no race: unique i)
-        cigar_ptr[i].start = dst;
-        cigar_ptr[i].len   = len;
-
-        // (Padding window for read i is [dst+len, dst+len+PAD) — left unused)
-    });
-}
-
 // Recalibrate implements the first step of base recalibration.
 //[[clang::optnone]]
 void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, int32_t maxCycle) {
@@ -454,17 +406,6 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
 
     profiler.stop(StageId::AddReadGroup);
 
-    //std::vector<char> clippedSequences(reads.SEQ.Data(), reads.SEQ.Data() + reads.SEQ.size());
-    //std::vector<SpanField> clippedSequencesPtrs(reads.SEQ.Ptrs().begin(), reads.SEQ.Ptrs().end());
-
-    //std::string clippedQualities(reads.QUAL.Data(), reads.QUAL.Data() + reads.QUAL.size());
-    //std::vector<SpanField> clippedQualitiesPtrs(reads.QUAL.Ptrs().begin(), reads.QUAL.Ptrs().end());
-
-    profiler.start(StageId::Transform);
-
-    std::vector<int64_t> pos(reads.POS.begin(), reads.POS.end());
-
-    //auto *pos = reads.POS.data();
     auto *clippedSequences = reads.SEQ.Data();
     auto *clippedSequencesPtrs = reads.SEQ.Ptrs().data();
     auto *clippedQualities = reads.QUAL.Data();
@@ -478,103 +419,21 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
     t.reset();
 
     tbb::parallel_for(0UL, reads.GetAlnsNum(), [&] (size_t idx) {
-        recalibrate_aln_flag[idx] = recalibrateAln(hdr, idx, reads.MAPQ[idx], reads.FLAG[idx], reads.RNAME[idx], reads.PNEXT[idx], reads.POS[idx], reads.GetSEQ(idx).size(), reads.GetQUAL(idx).size(), reads.CIGAR.Data(), reads.CIGAR.Ptrs()[idx], reads.TAGS.RG.Get(idx));
+        recalibrate_aln_flag[idx] = recalibrateAln(hdr, idx, reads.MAPQ[idx], reads.FLAG[idx], reads.RNAME[idx], reads.PNEXT[idx], reads.POS[idx], reads.GetSEQ(idx).size(), reads.GetQUAL(idx).size(), reads.CIGAR.Data(), reads.CIGAR.Ptrs()[idx], reads.TAGS.RG[idx]);
     });
 
     Logger::getLogger().log(LOG_INFO, "Time to set recalibrate flag: " + std::to_string(t.elapsed()));
 
     t.reset();
 
-    size_t max_thread = std::thread::hardware_concurrency();
-    size_t work_sz = (reads.GetAlnsNum() + max_thread - 1) / max_thread;
-
-    t.reset();
-
-    /*std::vector<std::vector<std::vector<CigarOperation>>> local_clipped_cigar(max_thread, std::vector<std::vector<CigarOperation>>(work_sz));
-    std::vector<std::vector<SpanField>> local_clipped_cigar_ptrs(max_thread);
-*/
-
-    // Assume each read has its own CIGAR span in reads.CIGAR (flattened layout)
-    // and reads.CIGAR.Ptrs() provides start offsets for each read.
-    // 0) locals
-    profiler.start(StageId::CopyCigar);
-    size_t PAD = 8;
-    const auto& src_cigar = reads.CIGAR.Data();
-    const auto& src_ptrs  = reads.CIGAR.Ptrs();
-    const size_t n_reads  = src_ptrs.size();
-
-    // 1) preallocate: sum(len) + PAD*n_reads (you already did this)
-    std::vector<CigarOperation> cigar(reads.CIGAR.size() + PAD * n_reads);
-    std::vector<SpanField>     cigar_ptr(n_reads);
-
-    parallel_copy_cigar_with_padding(src_cigar, src_ptrs, cigar, cigar_ptr, PAD);
-
-    profiler.stop(StageId::CopyCigar);
-
-    profiler.start(StageId::AdaptSequences);
-    tbb::parallel_for(0UL, max_thread, [&](size_t threadIdx) {
-    //for (auto threadIdx = 0; threadIdx < max_thread; threadIdx++) {
-        for (size_t idx = threadIdx * work_sz, local_idx = 0; idx < (threadIdx * work_sz + work_sz); idx++, local_idx++) {
-            if (idx >= maxIdx) {
-                return;
-            }
-            if (!recalibrate_aln_flag[idx]) {
-                continue;
-            }
-
-            //std::vector<CigarOperation> CIGAR(reads.GetCIGAR(idx).begin(), reads.GetCIGAR(idx).end());
-            //SpanField cigar_ptr_tmp(0, CIGAR.size());
-            //CIGAR.resize(CIGAR.size() + 16);
-            deviceHardClipAdaptorSequence(cigar.data(), cigar_ptr[idx], pos[idx], clippedSequences, clippedSequencesPtrs[idx],
-                                          clippedQualities, clippedQualitiesPtrs[idx], idx, reads.GetRNAME(idx),
-                                          reads.GetFLAG(idx),
-                                          reads.GetRNEXT(idx), reads.GetTLEN(idx),
-                                          reads.GetPNEXT(idx));
-
-            if (clippedSequencesPtrs[idx].len == 0) {
-                continue;
-            }
-            deviceHardClipSoftClippedBases(cigar.data(), cigar_ptr[idx], pos[idx], clippedSequences, clippedSequencesPtrs[idx],
-                                     clippedQualities, clippedQualitiesPtrs[idx], reads.GetRNAME(idx),
-                                     reads.GetFLAG(idx));
-        }
-    }
-    );
-
-    Logger::getLogger().log(LOG_INFO, "Time to clip sequences: " + std::to_string(t.elapsed()));
-
-    t.reset();
-    /*size_t totSz = 0;
-    for (const auto& cigars_thread : local_clipped_cigar) {
-        for (const auto& cigar : cigars_thread) {
-            totSz += cigar.size();
-        }
-    }
-
-    std::vector<CigarOperation> clipped_cigar_flat(totSz);
-    */
-    std::vector<size_t> clipped_cigar_flat_start(reads.GetAlnsNum());
-    std::vector<uint16_t> clipped_cigar_flat_len(reads.GetAlnsNum());
-
-    tbb::parallel_for (0UL, reads.GetAlnsNum(), [&](size_t i) {
-        clipped_cigar_flat_start[i] = cigar_ptr[i].start;
-        clipped_cigar_flat_len[i] = cigar_ptr[i].len;
-    });
-
-    Logger::getLogger().log(LOG_INFO, "Time to flatten clipped cigar vectors: " + std::to_string(t.elapsed()));
-
-    t.reset();
-
-    size_t total_sequences = reads.GetAlnsNum();
     size_t batch_size = reads.GetAlnsNum();
-    profiler.stop(StageId::AdaptSequences);
-
-    profiler.stop(StageId::Transform);
 
     profiler.start(StageId::RecalibrateBatches);
 
     t.reset();
-    // Update the SequencesInput instance to process only the current batch.
+    auto* cigar = reads.CIGAR.Data();
+    auto* cigar_ptr = reads.CIGAR.Ptrs().data();
+
     SequencesInput in(local_known_intervals, local_known_intervals_ptrs,
                       fasta, fasta_ptrs,
                       tables_quality.data(), tables_cycle.data(), tables_context.data(), tables_quality.size(), tables_cycle.size(), tables_context.size(),
@@ -583,10 +442,10 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
                       clippedSequencesPtrs,
                       clippedQualities,
                       clippedQualitiesPtrs,
-                      cigar.data(),
-                      clipped_cigar_flat_start.data(),
-                      clipped_cigar_flat_len.data(),
-                      pos.data(),
+                      cigar,
+                      cigar_ptr,
+                      reads.POS.data(),
+                      reads.RNEXT.data(), reads.PNEXT.data(), reads.TLEN.data(),
                       reads.RNAME.data(),
                       recalibrate_aln_flag.data(),
                       reads.FLAG.data(),
@@ -599,13 +458,9 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads, i
 
     // Set up your configuration using available device memory
     ComputeSkipSliceConfiguration config;
-    size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
-    config.max_memory = available_mem / 2;
-
-    // Create temporary kernel data for this batch to compute the max elements
-    ComputeSkipSliceKernelData tmp_kernel_data(q, config, memory_space_t::none);
-    size_t max_n_elements = bqsr_covariate_vector_kernel::update_batch_num_elements(in, tmp_kernel_data, 0);
-    config.max_n_elements_first_batch = max_n_elements;
+    //size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
+    size_t available_mem = q.get_device().get_info<sycl::info::device::global_mem_size>();
+    config.max_memory = available_mem / 3;
 
     // Process the current batch with your kernel
     batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(device, in, out, compute_skip_slice_kernel, config);
@@ -1275,8 +1130,8 @@ uint32_t MaxContextCovariateKey() {
     }
     return key;
 }
-
-void BaseRecalibratorTables::PrintBQSRTables(const std::string &filename, CompressedStringCollection &RG, Header &hdr) {
+//alns.GetHdr().getReadGroupRecord().getString(alns.TAGS.RG[idx])
+void BaseRecalibratorTables::PrintBQSRTables(const std::string &filename, std::vector<int32_t>& RG, Header &hdr) {
     std::ofstream file(filename);
 
     file << "#:" << BQSRTablenamePrefix << "Report.v1.1:5\n";
@@ -1342,7 +1197,7 @@ void BaseRecalibratorTables::printQuantizationTable(std::ofstream &file) {
     file << "\n";
 }
 
-void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, CompressedStringCollection& RG, Header &hdr) {
+void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, std::vector<int32_t>& RG, Header &hdr) {
     std::vector<combinedBqsrEntry> table(hdr.getReadGroupRecord().size()); // Table mapping from read groups to entries
 
     initializeCombinedBQSRTable(QualityScores, table);
@@ -1379,7 +1234,7 @@ void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, Compress
          << "  " << std::left << std::setw(static_cast<int32_t>(maxLenErrors)) << errorsString << "\n";
 
     std::sort(readGroups.begin(), readGroups.end(), [&](auto& e1, auto& e2){
-        return RG.IntToString(e1) < RG.IntToString(e2);
+        return hdr.getReadGroupRecord().getString(RG[e1]) < hdr.getReadGroupRecord().getString(RG[e2]);
     });
 
     for ( auto &rg : readGroups) {

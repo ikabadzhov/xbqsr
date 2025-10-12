@@ -162,12 +162,12 @@ bool SamAlignments::IsProper(uint16_t readFlag) { return (readFlag & Proper) != 
 
 // IsUnmapped checks for segment unmapped. See
 // http://samtools.github.io/hts-specs/SAMv1.pdf - Section 1.4.2.
-bool SamAlignments::IsUnmapped(uint16_t readFlag) { return (readFlag & Unmapped) != 0; }
+SYCL_EXTERNAL bool SamAlignments::IsUnmapped(uint16_t readFlag) { return (readFlag & Unmapped) != 0; }
 
 // IsNextUnmapped checks for next segment in the template
 // unmapped. See http://samtools.github.io/hts-specs/SAMv1.pdf -
 // Section 1.4.2.
-bool SamAlignments::IsNextUnmapped(uint16_t readFlag) { return (readFlag & NextUnmapped) != 0; }
+SYCL_EXTERNAL bool SamAlignments::IsNextUnmapped(uint16_t readFlag) { return (readFlag & NextUnmapped) != 0; }
 
 // IsReversed checks for SEQ being reversed complemented. See
 // http://samtools.github.io/hts-specs/SAMv1.pdf - Section 1.4.2.
@@ -176,7 +176,7 @@ SYCL_EXTERNAL bool SamAlignments::IsReversed(uint16_t readFlag) { return (readFl
 // IsNextReversed check for SEQ of the next segment in the template
 // being reverse complemented. See
 // http://samtools.github.io/hts-specs/SAMv1.pdf - Section 1.4.2.
-bool SamAlignments::IsNextReversed(uint16_t readFlag) { return (readFlag & NextReversed) != 0; }
+SYCL_EXTERNAL bool SamAlignments::IsNextReversed(uint16_t readFlag) { return (readFlag & NextReversed) != 0; }
 
 // IsFirst checks for being the first segment in the template. See
 // http://samtools.github.io/hts-specs/SAMv1.pdf - Section 1.4.2.

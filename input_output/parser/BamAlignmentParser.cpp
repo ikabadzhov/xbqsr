@@ -239,17 +239,17 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
 
     // ---- Optional fields (RAW TAG BLOB + RG extraction) ----
     // Adjust this to how you access your OptionalFields storage.
-    OptionalFields& opt = reads.TAGS;  // <--- rename to your actual handle
+    //OptionalFields& opt = reads.TAGS;  // <--- rename to your actual handle
 
     // ensure capacity (if you don't pre-size externally)
-    if (opt.tagsBlobOff.size() <= idx) {
+   /* if (opt.tagsBlobOff.size() <= idx) {
         opt.tagsBlobOff.resize(idx + 1, size_t{std::numeric_limits<size_t>::max()});
         opt.tagsBlobSize.resize(idx + 1, 0);
         // RG column should already be sized outside; otherwise:
         opt.RG.Resize(idx + 1);
-    }
+    }*/
 
-    if (aux_size == 0) {
+    /*if (aux_size == 0) {
         // No tags
         opt.tagsBlobOff[idx]  = std::numeric_limits<size_t>::max();
         opt.tagsBlobSize[idx] = 0;
@@ -258,7 +258,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
         const size_t arena_off = opt.tagArena.size();
         /*opt.tagArena.insert(opt.tagArena.end(),
                             reinterpret_cast<const std::byte*>(bytes.data() + aux_off),
-                            reinterpret_cast<const std::byte*>(bytes.data() + aux_off + aux_size));*/
+                            reinterpret_cast<const std::byte*>(bytes.data() + aux_off + aux_size));*//*
         opt.tagsBlobOff[idx]  = arena_off;
         opt.tagsBlobSize[idx] = aux_size;
 
@@ -326,82 +326,134 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
                 p = skip_payload(p, e, T);
             }
         }
-    }
+    }*/
 
     //profiler.stop(IOStageId::SAMStructUpdates);
 }
 
-void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(std::string_view bytes, SamAlignments &reads, size_t idx, VariableLenFieldsVar& fieldsOff, VariableLenFieldsVar& fieldsSizes, VariableLenFieldsVar& outputOff)
+static inline const uint8_t* skip_payload(const uint8_t* q, const uint8_t* e, char T) {
+    switch (T) {
+        case 'A': case 'c': case 'C': return q + 1;
+        case 's': case 'S':           return (q + 2 <= e) ? q + 2 : e;
+        case 'i': case 'I': case 'f': return (q + 4 <= e) ? q + 4 : e;
+        case 'Z': case 'H': {
+            const uint8_t* r = q;
+            while (r < e && *r != 0) ++r;
+            return (r < e) ? (r + 1) : e; // include NUL if present
+        }
+        case 'B': {
+            if (q + 5 > e) return e;     // subtype + count
+            const char subtype = char(*q++);
+            int32_t count = 0;
+            std::memcpy(&count, q, 4); q += 4;
+            size_t elem = 0;
+            switch (subtype) { case 'c': case 'C': elem = 1; break;
+                case 's': case 'S': elem = 2; break;
+                default:            elem = 4; break; }
+            size_t bytes = size_t(count) * elem;
+            return (q + bytes <= e) ? (q + bytes) : e;
+        }
+        default: return e;
+    }
+}
+
+void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
+    std::string_view bytes,
+    SamAlignments &reads,
+    size_t idx,
+    VariableLenFieldsVar const& fieldsOff,
+    VariableLenFieldsVar const& fieldsSizes,
+    VariableLenFieldsVar const& outOff)    // pass TAGS so we can write at fixed offsets
 {
-    //auto& profiler = ProfilerIO::instance();
+    ByteScanner bs; bs.reset(bytes);
 
-    // -------------------- PARSING --------------------
-    //profiler.start(IOStageId::Parsing);
-
-    ByteScanner bs;
-    bs.reset(bytes);
-
-    bs.setIndex(fieldsOff.name);
-
-    size_t l_name = fieldsSizes.name;
-    size_t l_seq = fieldsSizes.seq;
-    size_t l_qual = fieldsSizes.qual;
-    size_t l_cigar = fieldsSizes.cigar;
-
-    std::string qname = bs.readString(l_name);
-    if (!qname.empty() && qname.back() == '\0') qname.pop_back();
-
+    // ---- CIGAR: decode directly into final buffer ----
     bs.setIndex(fieldsOff.cigar);
-    std::vector<CigarOperation> cigarVector(l_cigar);
-    for (uint32_t i = 0; i < l_cigar; ++i) {
+    CigarOperation* dst_cig = reads.CIGAR.Data() + outOff.cigar;
+    for (uint32_t i = 0; i < fieldsSizes.cigar; ++i) {
         uint32_t op = bs.readInt32();
-        cigarVector[i] = CigarOperation{
+        dst_cig[i] = CigarOperation{
             (op >> 4),
-            cigarOps[static_cast<int>(op & 0x0F)]
+            cigarOps[int(op & 0x0F)]
         };
     }
+    reads.CIGAR.Ptrs()[idx] = SpanField{ outOff.cigar, static_cast<uint16_t>(fieldsSizes.cigar) };
 
+    // ---- SEQ: decode packed nibbles directly into final buffer ----
     bs.setIndex(fieldsOff.seq);
-    const size_t seq_bytes = (static_cast<size_t>(l_seq) + 1u) >> 1;
-    std::string decoded_seq;
-    decoded_seq.resize(l_seq);
-    {
-        size_t k = 0;
-        for (size_t i = 0; i < seq_bytes; ++i) {
-            uint8_t nibbles = bs.readByte();
-            uint8_t first   = nibbles >> 4;
-            uint8_t second  = nibbles & 0x0F;
-            decoded_seq[k++] = seqEncoder[first];
-            if (k < decoded_seq.size()) decoded_seq[k++] = seqEncoder[second];
-        }
+    char* dst_seq = reads.SEQ.Data() + outOff.seq;
+    const size_t l_seq    = fieldsSizes.seq;
+    const size_t seqBytes = (l_seq + 1u) >> 1;
+    size_t k = 0;
+    for (size_t i = 0; i < seqBytes; ++i) {
+        uint8_t nibbles = bs.readByte();
+        dst_seq[k++] = seqEncoder[nibbles >> 4];
+        if (k < l_seq) dst_seq[k++] = seqEncoder[nibbles & 0x0F];
     }
+    reads.SEQ.Ptrs()[idx] = SpanField{ outOff.seq, static_cast<uint16_t>(l_seq) };
 
-    assert(l_seq == l_qual);
+    // ---- QUAL: memcpy directly to final buffer ----
     bs.setIndex(fieldsOff.qual);
-    std::vector<char> qual(static_cast<size_t>(l_seq));
-    if (l_seq) {
-        const char* src = bytes.data() + bs.getIndex();
-        std::memcpy(qual.data(), src, static_cast<size_t>(l_seq));
-        bs.incrementIndex(static_cast<size_t>(l_seq));
+    std::memcpy(reads.QUAL.Data() + outOff.qual, bytes.data() + bs.getIndex(), l_seq);
+    reads.QUAL.Ptrs()[idx] = SpanField{ outOff.qual, static_cast<uint16_t>(l_seq) };
+
+
+    // ---- AUX: fixed-offset copy into arena (no insert/resize) ----
+    OptionalFields& opt = reads.TAGS;
+        if (fieldsSizes.aux) {
+        std::memcpy(
+            opt.tagArena.data() + outOff.aux,
+            bytes.data() + fieldsOff.aux,
+            fieldsSizes.aux
+        );
+        opt.tagsBlobOff[idx]  = outOff.aux;
+        opt.tagsBlobSize[idx] = fieldsSizes.aux;
+
+        // ---- RG extraction (Z string) → map to int via header ----
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(opt.tagArena.data()) + outOff.aux;
+        const uint8_t* e = p + fieldsSizes.aux;
+
+        int rg_int = -1; // or your sentinel for "no RG"
+        while (p + 3 <= e) {
+            const char k1 = char(p[0]);
+            const char k2 = char(p[1]);
+            p += 2;
+            const char T  = (p < e) ? char(*p++) : '\0';
+            if (k1 == 'R' && k2 == 'G') {
+                if (T == 'Z') {
+                    const uint8_t* z = p;
+                    while (z < e && *z != 0) ++z;
+                    const size_t len = size_t(z - p);
+                    // Lookup without allocating: string_view into arena bytes
+                    std::string rg_id{ reinterpret_cast<const char*>(p), len };
+
+                    // ---- header lookup (adapt to your API) ----
+                    // Example A: int id = reads.GetHdr().ReadGroups().MapId(rg_id);
+                    // Example B: auto idOpt = reads.GetHdr().ReadGroups().find(rg_id);
+                    //            if (idOpt) rg_int = *idOpt;
+                    rg_int = reads.GetHdr().getReadGroupRecord().getId(rg_id);
+
+                    // advance past the NUL (if any)
+                    p = (z < e) ? (z + 1) : e;
+                    break; // assume at most one RG
+                } else {
+                    p = skip_payload(p, e, T);
+                }
+            } else {
+                p = skip_payload(p, e, T);
+            }
+        }
+
+        // store integer RG for this record
+        // If your API is a plain array:
+        // opt.RG[idx] = rg_int;
+        // If it's a column type:
+        opt.RG[idx] = rg_int;
+
+    } else {
+        opt.tagsBlobOff[idx]  = std::numeric_limits<size_t>::max();
+        opt.tagsBlobSize[idx] = 0;
+        // opt.RG[idx] or opt.RG.Set(idx, -1);
+        opt.RG[idx] = -1;
     }
-
-    //profiler.stop(IOStageId::Parsing);
-
-    // ---------------- SAM STRUCT UPDATES ----------------
-    //profiler.start(IOStageId::SAMStructUpdates);
-
-    if (!qname.empty())
-        reads.QNAME[idx] = 0;//reads.GetHdr().QnameMapper().addString(qname);
-
-    std::memcpy(reads.CIGAR.Data() + outputOff.cigar, cigarVector.data(), sizeof(CigarOperation)*l_cigar);
-    std::memcpy(reads.SEQ.Data() + outputOff.seq, decoded_seq.data(), l_seq);
-    std::memcpy(reads.QUAL.Data() + outputOff.qual, qual.data(), l_qual);
-    reads.CIGAR.Ptrs()[idx] = SpanField{outputOff.cigar, static_cast<uint16_t>(l_cigar)};
-    reads.SEQ.Ptrs()[idx] = SpanField{outputOff.seq, static_cast<uint16_t>(l_seq)};
-    reads.QUAL.Ptrs()[idx] = SpanField{outputOff.qual, static_cast<uint16_t>(l_qual)};
-    // reads.CIGAR.Data().SetAt(cigarVector, idx);
-    // reads.SEQ.SetAt(decoded_seq, idx);
-    // reads.QUAL.SetAt(qual, idx);
-
-    //profiler.stop(IOStageId::SAMStructUpdates);
 }

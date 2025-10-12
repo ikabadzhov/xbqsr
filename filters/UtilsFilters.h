@@ -35,9 +35,9 @@ bool cigarContainsN(CigarOperation* cigar, SpanField& cigarPtrs);
 
 bool alignmentAgreesWithHeader(Header& hdr, int32_t rname, int32_t pos);
 
-bool isStrictUnmapped(bool isUnmapped, int32_t rname, int32_t pos);
+SYCL_EXTERNAL bool isStrictUnmapped(bool isUnmapped, int32_t rname, int32_t pos);
 
-bool isStrictNextUnmapped(bool isNextUnmapped, int32_t rnext, int32_t pnext);
+SYCL_EXTERNAL bool isStrictNextUnmapped(bool isNextUnmapped, int32_t rnext, int32_t pnext);
 
 bool hasWellDefinedFragmentSize(std::vector<CigarOperation>& CIGAR, int64_t POS, int32_t RNAME, int32_t RNEXT, uint16_t FLAG, int32_t TLEN, int32_t PNEXT);
 
@@ -75,7 +75,7 @@ int32_t calculateHardSoftOffset(std::vector<CigarOperation>& cigar);
 
 int32_t calculateAlnStartShift(std::vector<CigarOperation>& cigar, std::vector<CigarOperation>& clippedCigar);
 
-int32_t calculateHardClippingAlignmentShift(CigarOperation cigarOp, int cigarLength);
+SYCL_EXTERNAL int32_t calculateHardClippingAlignmentShift(CigarOperation cigarOp, int cigarLength);
 
 void hardClip(std::vector<CigarOperation>& cigar, char* SEQ, SpanField& sequencePtrs, char* QUAL, SpanField& qualPtrs, int64_t& POS, int32_t RNAME, uint16_t FLAG, int64_t start, int64_t stop);
 

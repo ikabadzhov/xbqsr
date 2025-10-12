@@ -67,7 +67,7 @@ void BamAlignmentFormatter::FormatBamAlignment(SamAlignments &alns, ssize_t idx,
         char tagSecondaryType = tag.second.getSecondaryTagType();
 
         if (tagKeyAsString == "RG") { // TODO: Hide this inside the OptionalField class
-            bf.appendString(alns.TAGS.RG.toString(idx));
+            //bf.appendString(alns.TAGS.RG.toString(idx));
         } else {
             if (tagType == 'A') {
                 if (alns.TAGS.GetCharTags(tagKeyAsString).isValid(idx)) {

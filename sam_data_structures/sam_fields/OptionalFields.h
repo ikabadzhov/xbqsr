@@ -13,7 +13,8 @@ public:
     std::vector<size_t> tagsBlobOff;
     std::vector<size_t> tagsBlobSize;
     std::vector<std::byte> tagArena;
-    CompressedStringCollection RG;
+    std::vector<int32_t> RG;
+    //CompressedStringCollection RG;
 
     std::map<uint16_t, TagKeyAndType> ALL_TAGS;
     /*

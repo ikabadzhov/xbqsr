@@ -161,11 +161,22 @@ public:
 
     static void memcpy_dev_to_host(sycl::queue& transfer_queue, ApplyBqsrOutput& dest, size_t dest_offset, AppyBqsrKernelData& src,
                                    size_t src_offset, size_t n_elements);
+
+    template <typename InputT>
+    static size_t compute_max_elements(const InputT& in,
+                                      const AppyBqsrKernelData& kd,
+                                      size_t start_idx);
 };
 
 namespace apply_bqsr {
     size_t update_batch_num_elements(const ApplyBqsrSequencesInput &in, const AppyBqsrKernelData &kernel_data,
                                      size_t start_idx);
 }
+template<typename InputT>
+size_t AppyBqsrKernelData::compute_max_elements(const InputT &in, const AppyBqsrKernelData &kd, size_t start_idx) {
+    return apply_bqsr::update_batch_num_elements(in, kd, start_idx);
+}
+
+
 
 #endif //APPLYBQSRKERNELDATA_H

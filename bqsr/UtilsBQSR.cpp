@@ -2,7 +2,7 @@
 #include "../filters/UtilsFilters.h"
 
 
-void deviceHardClipAdaptorSequence(CigarOperation *clipped_cigar, SpanField& cigar_ptr, int64_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx, int32_t RNAME, uint16_t FLAG, int32_t RNEXT, int32_t TLEN, int32_t PNEXT) {
+void deviceHardClipAdaptorSequence(CigarOperation *clipped_cigar, SpanField& cigar_ptr, int32_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx, int32_t RNAME, uint16_t FLAG, int32_t RNEXT, int32_t TLEN, int32_t PNEXT) {
     int64_t adaptorBoundary = deviceComputeAdaptorBoundary(clipped_cigar, cigar_ptr, POS, RNAME, RNEXT, FLAG, TLEN, PNEXT); // Doesn't modify anything
     if (adaptorBoundary == INT64_MIN || !deviceIsInsideRead(clipped_cigar, cigar_ptr, POS, adaptorBoundary)) {
         return;
@@ -14,7 +14,7 @@ void deviceHardClipAdaptorSequence(CigarOperation *clipped_cigar, SpanField& cig
     }
 }
 
-int64_t deviceComputeAdaptorBoundary(CigarOperation *cigar, SpanField &cigar_ptr, int64_t POS,
+int64_t deviceComputeAdaptorBoundary(CigarOperation *cigar, SpanField &cigar_ptr, int32_t POS,
                                      int32_t RNAME, int32_t RNEXT, uint16_t FLAG, int32_t TLEN, int32_t PNEXT) {
 
     int32_t alnEnd = SamAlignments::End(cigar, cigar_ptr, POS);
@@ -29,11 +29,11 @@ int64_t deviceComputeAdaptorBoundary(CigarOperation *cigar, SpanField &cigar_ptr
     }
 }
 
-bool deviceIsInsideRead(CigarOperation *CIGAR, SpanField &cigar_ptr, int64_t POS, int64_t refCoord) {
+bool deviceIsInsideRead(CigarOperation *CIGAR, SpanField &cigar_ptr, int32_t POS, int64_t refCoord) {
     return refCoord >= POS && refCoord <= SamAlignments::End(CIGAR, cigar_ptr, POS);
 }
 
-bool deviceHasWellDefinedFragmentSize(int32_t alnEnd, int64_t POS, int32_t RNAME, int32_t RNEXT, uint16_t FLAG, int32_t TLEN, int32_t PNEXT) {
+bool deviceHasWellDefinedFragmentSize(int32_t alnEnd, int32_t POS, int32_t RNAME, int32_t RNEXT, uint16_t FLAG, int32_t TLEN, int32_t PNEXT) {
     if (TLEN == 0) {
         return false;
     }
@@ -103,7 +103,7 @@ int32_t deviceCalculateHardSoftOffset(CigarOperation* cigar, SpanField& cigar_pt
 inline void deviceHardClip(
     CigarOperation* cigar_buf, SpanField& cigar_ptr,
     SpanField& sequencePtrs, SpanField& qualPtrs,
-    int64_t& POS, int32_t RNAME, uint16_t FLAG,
+    int32_t &POS, int32_t RNAME, uint16_t FLAG,
     int64_t start, int64_t stop)
 {
     auto readLength = sequencePtrs.len;
@@ -135,7 +135,7 @@ inline void deviceHardClip(
 }
 
 void deviceHardClipByReferenceCoordinatesLeftTail(CigarOperation *clipped_cigar, SpanField &cigar_ptr,
-                                                  int64_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx,
+                                                  int32_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx,
                                                   int32_t RNAME, uint16_t FLAG, int64_t refStop) {
 
     int32_t sftStart = softStart(clipped_cigar + cigar_ptr.start, cigar_ptr.len, POS);
@@ -143,13 +143,15 @@ void deviceHardClipByReferenceCoordinatesLeftTail(CigarOperation *clipped_cigar,
 
     int64_t stop = t.first - (CigarOperatorConsumesReadBases[static_cast<uint8_t>(t.second.Operation)]>0 ? 0 : 1);
     if (stop < 0) {
-        exit(-1);
+        //exit(-1);
+        //abort();
+        assert(false && "Negative stop coordinate in hard clip");
     }
     deviceHardClip(clipped_cigar, cigar_ptr, sequencePtrs, qualPtrs, POS, RNAME, FLAG, 0, stop);
 }
 
 void deviceHardClipByReferenceCoordinatesRightTail(CigarOperation *clipped_cigar, SpanField &cigar_ptr,
-                                                   int64_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx,
+                                                   int32_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx,
                                                    int32_t RNAME, uint16_t FLAG, int64_t refStart) {
     auto sftStart = softStart(clipped_cigar + cigar_ptr.start, cigar_ptr.len, POS);
     std::pair<int64_t, CigarOperation> t = deviceGetReadCoordinateForReferenceCoordinate(clipped_cigar, cigar_ptr, sftStart, refStart);
@@ -157,7 +159,9 @@ void deviceHardClipByReferenceCoordinatesRightTail(CigarOperation *clipped_cigar
 
     if (start < 0) {
         //std::cerr << "reference coordinate matches a non-existing base in read at index " << idx << std::endl;
-        exit(100);
+        //exit(100);
+        assert(false && "Negative stop coordinate in hard clip");
+        //abort();
     }
     deviceHardClip(clipped_cigar, cigar_ptr, sequencePtrs, qualPtrs, POS, RNAME, FLAG, start, sequencePtrs.len - 1);
 }
@@ -398,7 +402,7 @@ void deviceHardClipCigar(CigarOperation* cigar, SpanField &cigar_ptr, int64_t st
 }
 
 
-void deviceHardClipSoftClippedBases(CigarOperation *cigar, SpanField &cigar_ptr, int64_t &POS, char *sequence,
+void deviceHardClipSoftClippedBases(CigarOperation *cigar, SpanField &cigar_ptr, int32_t &POS, char *sequence,
     SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, int32_t RNAME, uint16_t FLAG) {
     int32_t readIndex = 0;
     int32_t cutLeft = -1;

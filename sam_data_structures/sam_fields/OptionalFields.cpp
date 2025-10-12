@@ -4,7 +4,7 @@
 #include "../../input_output/utils/StringScanner.h"
 
 void OptionalFields::Resize(size_t sz) {
-    RG.Resize(sz);
+    RG.resize(sz);
     tagsBlobOff.resize(sz, 0);
     tagsBlobSize.resize(sz, 0);
     /*IntegerTags.Resize(sz);
@@ -24,7 +24,7 @@ void OptionalFields::Resize(size_t sz) {
 }
 
 void OptionalFields::Permute(std::vector<size_t> &indices) {
-    this->RG.Permute(indices);
+    permute(indices, this->RG);
     this->IntegerTags.Permute(indices);
     this->FloatTags.Permute(indices);
     this->StringTags.Permute(indices);
@@ -109,7 +109,7 @@ void OptionalFields::InsertFloatTagAt(size_t idx, TagKeyAndType &tag, float tagV
 }
 
 void OptionalFields::InsertStringTagAt(size_t idx, TagKeyAndType &tag, const std::string &tagValue) {
-    if (ALL_TAGS.contains(tag.getTagKey()) <= 0) {
+    /*if (ALL_TAGS.contains(tag.getTagKey()) <= 0) {
         ALL_TAGS[tag.getTagKey()] = tag;
     }
     if (tag.getTagKeyAsString() == "RG") {
@@ -117,7 +117,7 @@ void OptionalFields::InsertStringTagAt(size_t idx, TagKeyAndType &tag, const std
     } else {
         StringTags.AddTagIfNeeded(tag.getTagKey());
         StringTags.AssignTagValue(idx, tag.getTagKey(), tagValue);
-    }
+    }*/
 }
 
 void OptionalFields::InsertArrayHexTagAt(size_t idx, TagKeyAndType tag, const std::string &array) {

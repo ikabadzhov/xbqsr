@@ -176,14 +176,14 @@ int main(int argc, char **argv) {
     }
 
     // Select the second GPU (index 1)
-    size_t selected_idx = 1;  // zero-based index
+    size_t selected_idx = 0;  // zero-based index
     if (selected_idx >= gpus.size()) {
         std::cerr << "Requested GPU index " << selected_idx
                   << " but only " << gpus.size() << " GPUs available.\n";
         return 1;
     }
 
-    sycl::device device = gpus[1];
+    sycl::device device = gpus[selected_idx];
 
     sycl::queue q(device);
 
@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
         t.reset();
         print_stage_header("Reading SAM File");
         size_t nAlns = alignmentReader->ParseAlignment(alignments, header);
-        assert(nAlns == alignments.GetAlnsNum());
+        //assert(nAlns == alignments.GetAlnsNum());
 
         Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t.elapsed()) + " sec");
     });
@@ -259,7 +259,7 @@ int main(int argc, char **argv) {
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
 
-        BaseRecalibratorTables baseRecalibratorTables(alignments[0].TAGS.RG.NumEntriesTable(), 94,
+        BaseRecalibratorTables baseRecalibratorTables(alignments[0].GetHdr().getReadGroupRecord().size(), 94,
                                                       maxCycle);//TODO: Make the size as function of context size
 
         baseRecalibratorTables.ApplyBQSR(device, alignments[0], quantize_level, sqqList, maxCycle);

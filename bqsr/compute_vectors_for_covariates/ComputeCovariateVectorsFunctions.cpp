@@ -1,7 +1,7 @@
 #include "ComputeCovariateVectorsFunctions.h"
 
 #include <boost/iostreams/categories.hpp>
-
+#include "../UtilsBQSR.h"
 #include "../../sycl_parallel_library/sorting/mergesort.h"
 #include "../../timer/Timer.h"
 #include "../../sycl_parallel_library/segmented_reduce/segreduce.h"
@@ -264,10 +264,15 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     auto d_sequences_ptr = batch->_d_data.d_sequences_ptr;
     auto d_qualities = batch->_d_data.d_qualities;
     auto d_cigar = batch->_d_data.d_cigar;
-    auto d_cigar_start = batch->_d_data.d_cigar_start;
-    auto d_cigar_len = batch->_d_data.d_cigar_len;
+    auto d_cigar_ptr = batch->_d_data.d_cigar_ptr;
+    auto d_clipped_cigar = batch->_d_data.d_clipped_cigar;
+    auto d_clipped_cigar_start = batch->_d_data.d_clipped_cigar_start;
+    auto d_clipped_cigar_len = batch->_d_data.d_clipped_cigar_len;
     auto d_pos = batch->_d_data.d_pos;
     auto d_rname = batch->_d_data.d_rname;
+    auto d_rnext = batch->_d_data.d_rnext;
+    auto d_pnext = batch->_d_data.d_pnext;
+    auto d_tlen = batch->_d_data.d_tlen;
     auto d_known_site = batch->_d_data.d_known_sites;
     auto d_known_site_ptr = batch->_d_data.d_known_sites_ptr;
     auto d_reference = batch->_d_data.d_reference;
@@ -293,9 +298,9 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     auto d_cycle_table_vals = batch->_d_data.d_cycle_table_vals;
     auto d_context_table_vals = batch->_d_data.d_context_table_vals;
 
-    auto d_segments_quality = batch->_d_data.d_segments_quality;
+    /*auto d_segments_quality = batch->_d_data.d_segments_quality;
     auto d_segments_cycle = batch->_d_data.d_segments_cycle;
-    auto d_segments_context = batch->_d_data.d_segments_context;
+    auto d_segments_context = batch->_d_data.d_segments_context;*/
 
     auto d_quality_table = batch->_d_data.d_quality_table;
     auto d_cycle_table = batch->_d_data.d_cycle_table;
@@ -310,17 +315,71 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     size_t offset_sequences = batch->_d_data.d_sequence_span_offset;
     size_t offset_cigar = batch->_d_data.d_cigar_span_offset;
 
+    assert(batch->_d_data.table_sz < 2000000000);
 
+    profile.start(StageId::ClipSequences);
     t.reset();
     batch->_q_process.parallel_for<class SetOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
-        d_cigar_start[idx] -= offset_cigar;
+        auto base = d_cigar_ptr[idx].start - offset_cigar;
+        d_cigar_ptr[idx].start -= offset_cigar;
 
         d_sequences_ptr[idx].start -= offset_sequences;
         d_stranded_seq_ptr[idx].start -= offset_sequences;
         d_base_context_ptr[idx].start -= offset_sequences;
+        d_clipped_cigar_start[idx]    = base + (PAD * (size_t)idx);
+        d_clipped_cigar_len[idx]      = d_cigar_ptr[idx].len;
     });
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "    [SetOffset kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+
+    // Copy the source cigar ops into their clipped windows
+    // (Use your favorite copy kernel; shown here as a simple loop kernel.)
+    batch->_q_process.parallel_for<class CopyCigarToClipped>(
+        sycl::range<1>(batch->_n), [=](sycl::id<1> id) {
+            size_t i = id[0];
+            size_t src_s = d_cigar_ptr[i].start;
+            size_t L     = d_cigar_ptr[i].len;
+            size_t dst_s = d_clipped_cigar_start[i];
+
+            for (size_t k = 0; k < L; ++k) {
+                d_clipped_cigar[dst_s + k] = d_cigar[src_s + k];
+            }
+        });
+    batch->_q_process.wait_and_throw();
+
+    batch->_q_process.parallel_for<class Clipping>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+        if (!d_recalibrated[idx]) {
+            return;
+        }
+        SpanField clip_span;
+        clip_span.start = d_clipped_cigar_start[idx];
+        clip_span.len   = d_clipped_cigar_len[idx];  // initialized to original L
+
+        deviceHardClipAdaptorSequence(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
+                                      d_qualities, d_sequences_ptr[idx], idx, d_rname[idx],
+                                      d_flag[idx],
+                                      d_rnext[idx], d_tlen[idx],
+                                      d_pnext[idx]);
+
+        if (d_sequences_ptr[idx].len == 0) {
+            d_clipped_cigar_start[idx] = clip_span.start;
+            d_clipped_cigar_len[idx]   = clip_span.len;
+            return;
+        }
+        deviceHardClipSoftClippedBases(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
+                                      d_qualities, d_sequences_ptr[idx], d_rname[idx],
+                                   d_flag[idx]);
+
+        d_clipped_cigar_start[idx] = clip_span.start;
+        d_clipped_cigar_len[idx]   = clip_span.len;
+        d_stranded_seq_ptr[idx] = d_sequences_ptr[idx];
+        d_base_context_ptr[idx] = d_sequences_ptr[idx];
+
+    });
+    batch->_q_process.wait_and_throw();
+    Logger::getLogger().log(LOG_DEBUG, "    [Clip Sequences kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+
+    profile.stop(StageId::ClipSequences);
 
     t.reset();
     profile.start(StageId::ComputeSkipVector);
@@ -337,9 +396,9 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
 
         int64_t sftStart = 0;
         {
-            auto cigar = d_cigar + d_cigar_start[idx];
+            auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
             auto start = d_pos[idx];
-            for (size_t i = 0; i < d_cigar_len[idx]; i++) {
+            for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
                 CigarOperation op = cigar[i];
                 if (op.Operation == 'S') {
                     start -= op.Length;
@@ -356,8 +415,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
          * Return: length per string
          */
         int32_t length = 0;
-        for (size_t i = 0; i < d_cigar_len[idx]; i++) {
-            CigarOperation op = d_cigar[d_cigar_start[idx] + i];
+        for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
+            CigarOperation op = d_clipped_cigar[d_clipped_cigar_start[idx] + i];
             // We can comment out this
             if (CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] > 0) {
                 length += static_cast<int32_t>(CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] * op.Length);
@@ -369,9 +428,9 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
         int64_t sftEnd = end;
         {
             bool saw_nonHS = false;
-            auto cigar = d_cigar + d_cigar_start[idx];
+            auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
 
-            for (int64_t i = static_cast<int64_t>(d_cigar_len[idx]) - 1; i >= 0; i--) {
+            for (int64_t i = static_cast<int64_t>(d_clipped_cigar_len[idx]) - 1; i >= 0; i--) {
                  CigarOperation op = cigar[i];
                  if (op.Operation == 'S') {
                      sftEnd += static_cast<int32_t>(op.Length);
@@ -386,9 +445,9 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
             }
         }
         if (d_known_site_ptr[d_rname[idx]].len > 0) {
-            SpanField cigar_ptr(d_cigar_start[idx], d_cigar_len[idx]);
+            SpanField cigar_ptr(d_clipped_cigar_start[idx], d_clipped_cigar_len[idx]);
             calculateSkipSlice(d_sequences, d_sequences_ptr[idx], d_qualities, d_sequences_ptr[idx]/*d_qualities_ptr[idx]*/,
-                               d_cigar, cigar_ptr, d_pos[idx], sftStart, sftEnd,
+                               d_clipped_cigar, cigar_ptr, d_pos[idx], sftStart, sftEnd,
                                d_known_site, d_known_site_ptr[d_rname[idx]],
                                d_skip_slice + d_sequences_ptr[idx].start/*d_skip_slice_ptr[idx].start*/);
         }
@@ -410,7 +469,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
             }
 
             computeSnpEvents(d_sequences, d_sequences_ptr[idx], d_pos[idx],
-                             d_cigar, d_cigar_start[idx], d_cigar_len[idx], d_reference, d_reference_ptr[d_rname[idx]],
+                             d_clipped_cigar, d_clipped_cigar_start[idx], d_clipped_cigar_len[idx], d_reference, d_reference_ptr[d_rname[idx]],
                             d_snps + d_sequences_ptr[idx].start/*d_snps_ptr[idx].start*/);
     });
         batch->_q_process.wait_and_throw();
@@ -450,7 +509,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
 
     t.reset();
     {
-        enum { nt = 256, vt = 1, vt0 = 5, nv = nt*vt };
+        /*enum { nt = 256, vt = 1, vt0 = 5, nv = nt*vt };
         uint32_t num_ctas = div_up(batch->_d_data.table_sz, size_t(nv));
 
         batch->_q_process.parallel_for<class SetDefaultValues>(
@@ -498,7 +557,24 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         d_segments_context[global_base + j] = 0;
                     }, tid, count);
         });
+    }*/
+
+        const size_t n = batch->_d_data.table_sz;
+
+        // 0-inits are free of kernels:
+        batch->_q_process.fill(d_quality_table_vals,  static_cast<val_t>(0), n);
+        batch->_q_process.fill(d_cycle_table_vals,    static_cast<val_t>(0), n);
+        batch->_q_process.fill(d_context_table_vals,  static_cast<val_t>(0), n);
+        /*batch->_q_process.memset(d_segments_quality,    0, n * sizeof(*d_segments_quality));
+        batch->_q_process.memset(d_segments_cycle,      0, n * sizeof(*d_segments_cycle));
+        batch->_q_process.memset(d_segments_context,    0, n * sizeof(*d_segments_context));
+*/
+        // If INVALID_INDEX == -1 and index type is 2's-complement int, this is valid and fastest:
+        batch->_q_process.fill(d_quality_table_indexes, static_cast<int32_t>(INVALID_INDEX), n);
+        batch->_q_process.fill(d_cycle_table_indexes,   static_cast<int32_t>(INVALID_INDEX), n);
+        batch->_q_process.fill(d_context_table_indexes, static_cast<int32_t>(INVALID_INDEX), n);
     }
+
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "    [SetDefaultValues kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 

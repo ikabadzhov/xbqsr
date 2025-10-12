@@ -320,16 +320,15 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignment
     std::exclusive_scan(std::execution::par_unseq, fieldsSizes.begin(), fieldsSizes.end(), outputOffsets.begin(), VariableLenFieldsVar(0,0,0,0), [](VariableLenFieldsVar& s1, VariableLenFieldsVar& s2) {
         return VariableLenFieldsVar{s1.name + s2.name, s1.cigar + s2.cigar, s1.seq + s2.seq, s1.qual + s2.qual, s1.aux + s2.aux};
     });
-    //profiler.stop(IOStageId::Parsing);
-    //profiler.start(IOStageId::SAMStructUpdates);
-    /*fieldsSizes.back().name = ;
-    fieldsSizes.back().seq;
-    fieldsSizes.back().qual;
-    fieldsSizes.back().cigar;*/
+
     reads.SEQ.ResizeData(outputOffsets.back().seq);
     reads.QUAL.ResizeData(outputOffsets.back().qual);
     reads.CIGAR.ResizeData(outputOffsets.back().cigar);
-
+    OptionalFields& opt = reads.TAGS;
+    opt.tagArena.resize(outputOffsets.back().aux);  // raw arena
+    //opt.RG.resize(boundaries.size());
+    //opt.tagsBlobOff.assign(N, std::numeric_limits<size_t>::max());
+    //opt.tagsBlobSize.assign(N, 0);
     //for (size_t recIdx = 0; recIdx < boundaries.size(); ++recIdx) {
 
     tbb::parallel_for (0UL, boundaries.size(), [&boundaries, &reads, &fieldsOff, &fieldsSizes, &outputOffsets](size_t recIdx) {

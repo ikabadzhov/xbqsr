@@ -1,7 +1,7 @@
 #include "SamAlignmentFormatter.h"
 
 size_t SamAlignmentFormatter::GetSamAlignmentSize(SamAlignments& alns, ssize_t idx) {
-    size_t tot_sz = alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)).size();
+    size_t tot_sz = 0;//alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)).size();
     tot_sz +=1; // account for \t
 
     tot_sz += std::to_string(alns.GetFLAG(idx)).size();
@@ -279,8 +279,8 @@ void SamAlignmentFormatter::FormatSamAlignmentInBuffer(SamAlignments& alns, ssiz
 
     // 1. QNAME
     {
-        std::string_view qname = alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx));
-        copyStringView(out, qname, offset);
+        //std::string_view qname = alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx));
+        //copyStringView(out, qname, offset);
     }
     out[offset++] = '\t';
 
@@ -559,7 +559,7 @@ void SamAlignmentFormatter::FormatSamAlignmentInBuffer(SamAlignments& alns, ssiz
 }
 
 void SamAlignmentFormatter::FormatSamAlignment(SamAlignments& alns, ssize_t idx, std::string& line) {
-    line.append(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)));
+    //line.append(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)));
     line.append(1, '\t');
 
     line.append(std::to_string(alns.GetFLAG(idx)));

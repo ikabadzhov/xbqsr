@@ -66,7 +66,7 @@ private:
 public:
     explicit SamAlignments(std::shared_ptr<Header> h) : hdr(std::move(h)) {}
 
-    std::vector<int32_t> QNAME; // TODO: For the moment òet's keep it int32_t because the empty string is represented with -1, but later change everything in uint32_t
+    StringCollection QNAME;
     std::vector<tileInfo> TILE;
     std::vector<int32_t> RNAME;
     std::vector<int32_t> RNEXT;
@@ -102,7 +102,7 @@ public:
     /**
      * Getters for a single value
      * */
-    [[nodiscard]] ssize_t GetQNAME(size_t idx) const;
+    [[nodiscard]] std::string_view GetQNAME(size_t idx);
     [[nodiscard]] ssize_t GetRNAME(size_t idx) const;
     [[nodiscard]] const int32_t GetTLEN(size_t idx) const;
     [[nodiscard]] int32_t GetPNEXT(size_t idx) const;

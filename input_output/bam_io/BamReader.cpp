@@ -318,12 +318,13 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp, SamAlignment
     // Scan the sizes to know where each thread should write
     std::vector<VariableLenFieldsVar> outputOffsets(fieldsSizes.size());
     std::exclusive_scan(std::execution::par_unseq, fieldsSizes.begin(), fieldsSizes.end(), outputOffsets.begin(), VariableLenFieldsVar(0,0,0,0), [](VariableLenFieldsVar& s1, VariableLenFieldsVar& s2) {
-        return VariableLenFieldsVar{s1.name + s2.name, s1.cigar + s2.cigar, s1.seq + s2.seq, s1.qual + s2.qual, s1.aux + s2.aux};
+        return VariableLenFieldsVar{s1.qname + s2.qname, s1.cigar + s2.cigar, s1.seq + s2.seq, s1.qual + s2.qual, s1.aux + s2.aux};
     });
 
     reads.SEQ.ResizeData(outputOffsets.back().seq);
     reads.QUAL.ResizeData(outputOffsets.back().qual);
     reads.CIGAR.ResizeData(outputOffsets.back().cigar);
+    reads.QNAME.ResizeData(outputOffsets.back().qname);
     OptionalFields& opt = reads.TAGS;
     opt.tagArena.resize(outputOffsets.back().aux);  // raw arena
     //opt.RG.resize(boundaries.size());

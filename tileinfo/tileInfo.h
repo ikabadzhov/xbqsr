@@ -50,7 +50,7 @@ public:
     }
 };
 
-tileInfo computeTileInfo(const std::string &QNAME);
+tileInfo computeTileInfo(std::string_view QNAME);
 
 
 #endif //TILEINFO_H

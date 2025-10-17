@@ -6,7 +6,7 @@
 
 class VariableLenFieldsVar {
 public:
-    size_t name;
+    size_t qname;
     size_t cigar;
     size_t seq;
     size_t qual;

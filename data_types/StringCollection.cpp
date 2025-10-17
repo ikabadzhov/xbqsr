@@ -17,6 +17,14 @@ std::string_view StringCollection::operator[](size_t idx) const {
     return {data.begin()+ptrs[idx].start, data.begin()+ptrs[idx].start+ptrs[idx].len};
 }
 
+char * StringCollection::Data() {
+    return data.data();
+}
+
+StringField * StringCollection::Ptrs() {
+    return ptrs.data();
+}
+
 void StringCollection::Resize(size_t sz) {
     size = sz;
     ptrs.resize(sz);

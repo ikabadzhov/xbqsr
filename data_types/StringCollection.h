@@ -26,8 +26,15 @@ public:
     void SetAt(std::string_view str, size_t idx);
     void Resize(size_t sz);
     std::string_view operator[](size_t idx) const;
-
+    char* Data();
+    StringField* Ptrs();
     void Permute(std::vector<size_t>& indexes);
+
+
+    void ResizeData(size_t sz) {
+        data.resize(sz);
+    }
+
 };
 
 

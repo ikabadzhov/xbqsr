@@ -77,7 +77,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
     reads.TLEN[idx]  = tlen;
 
     if (!qname.empty())
-        reads.QNAME[idx] = reads.GetHdr().QnameMapper().addString(qname);
+        //reads.QNAME[idx] = reads.GetHdr().QnameMapper().addString(qname);
     reads.TILE[idx] = computeTileInfo(qname);
 
     reads.CIGAR.SetAt(cigarVector, idx);
@@ -178,9 +178,14 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
     int32_t  next_pos0    = bs.readInt32();
     int32_t  tlen         = bs.readInt32();
 
-    // QNAME
-    std::string qname = bs.readString(l_read_name);
-    if (!qname.empty() && qname.back() == '\0') qname.pop_back();
+    // --- QNAME (do not read, just record & skip) ---
+    if (!bs.canRead(l_read_name))
+        throw std::runtime_error("Truncated QNAME");
+
+    fieldsOff.qname   = bs.getIndex();      // byte offset where QNAME starts
+    fieldsSizes.qname = l_read_name;        // bytes INCLUDING the trailing '\0'
+
+    bs.incrementIndex(l_read_name);         // skip QNAME to reach CIGAR
 
     // CIGAR (n_cigar_op 32-bit words)
     const size_t cigar_off   = bs.getIndex();
@@ -229,13 +234,6 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
     reads.MAPQ[idx]  = mapq;
     reads.FLAG[idx]  = flag;
     reads.TLEN[idx]  = tlen;
-
-    // If you want to skip QNAME interning here:
-    if (!qname.empty()) {
-        // reads.QNAME[idx] = reads.GetHdr().QnameMapper().addString(qname);
-        reads.QNAME[idx] = 0; // as in your snippet
-    }
-    reads.TILE[idx] = computeTileInfo(qname);
 
     // ---- Optional fields (RAW TAG BLOB + RG extraction) ----
     // Adjust this to how you access your OptionalFields storage.
@@ -366,6 +364,36 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
     VariableLenFieldsVar const& outOff)    // pass TAGS so we can write at fixed offsets
 {
     ByteScanner bs; bs.reset(bytes);
+
+    bs.setIndex(fieldsOff.qname);
+
+    const uint32_t qname_bytes_including_nul = fieldsSizes.qname; // BAM l_read_name
+    const size_t   qname_src_off = bs.getIndex();
+
+    if (qname_bytes_including_nul) {
+        const char *qsrc = bytes.data() + qname_src_off;
+
+        // BAM requires a trailing NUL; be defensive if input is malformed.
+        size_t qname_len = qname_bytes_including_nul;
+        if (qname_len && qsrc[qname_len - 1] == '\0') {
+            qname_len -= 1; // drop the NUL
+        }
+
+        // Copy exactly the visible characters of QNAME
+        char* dst = reads.QNAME.Data() + outOff.qname;
+        std::memcpy(dst, qsrc, qname_len);
+
+        // Store span (offset + length without NUL)
+        reads.QNAME.Ptrs()[idx] = StringField {
+            outOff.qname,
+            static_cast<uint16_t>(qname_len)
+        };
+    } else {
+        // Empty name (shouldn't happen in valid BAM, but handle gracefully)
+        reads.QNAME.Ptrs()[idx] = StringField{ outOff.qname, 0 };
+    }
+
+    reads.TILE[idx] = computeTileInfo(reads.GetQNAME(idx));
 
     // ---- CIGAR: decode directly into final buffer ----
     bs.setIndex(fieldsOff.cigar);

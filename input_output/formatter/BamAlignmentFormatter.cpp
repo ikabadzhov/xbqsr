@@ -16,7 +16,7 @@ void BamAlignmentFormatter::FormatBamAlignment(SamAlignments &alns, ssize_t idx,
     bf.appendInt32(alns.GetRNAME(idx));
     //Field: pos
     bf.appendInt32(alns.GetPOS(idx)-1);
-    bf.appendByte(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)).size() + 1); //?
+    //bf.appendByte(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)).size() + 1); //?
     //Field: mapq
     bf.appendByte(alns.GetMAPQ(idx));
     //Field: bin, we don't use it
@@ -35,7 +35,7 @@ void BamAlignmentFormatter::FormatBamAlignment(SamAlignments &alns, ssize_t idx,
     bf.appendInt32(alns.GetTLEN(idx));
     //Field: read_name
     //alns.GetQNAME(idx) returns the ID of the QNAME while this whole line gets the final name [read_name]
-    bf.appendString(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)));
+    //bf.appendString(alns.GetHdr().QnameMapper().GetAt(alns.GetQNAME(idx)));
     bf.appendByte('\0');
 
     //Field: Cigar

@@ -15,8 +15,8 @@ void SamAlignmentParser::ParseSamAlignment(StringScanner &sc, SamAlignments &rea
     std::string value;
     sc.doString(value);
     size_t qnameMappedIdx = reads.GetHdr().QnameMapper().addString(value);
-    reads.QNAME[idx] = qnameMappedIdx;
-    reads.TILE[idx] = computeTileInfo(value);
+    //reads.QNAME[idx] = qnameMappedIdx;
+    //reads.TILE[idx] = computeTileInfo(value);
 
     reads.FLAG[idx] = static_cast<uint16_t>(sc.doUint());
 

@@ -36,17 +36,17 @@ bool tileInfo::operator!=(const tileInfo &rhs) const {
     return !(rhs == *this);
 }
 
-tileInfo computeTileInfo(const std::string &QNAME) {
+tileInfo computeTileInfo(std::string_view QNAME) {
     std::vector<std::string> qnameInfo;
     qnameInfo.reserve(7);
 
     ssize_t pos = 0;
     ssize_t endPos = 0;
     while((endPos = QNAME.find_first_of(':', pos))!=std::string::npos) {
-        qnameInfo.push_back(QNAME.substr(pos, endPos-pos));
+        qnameInfo.emplace_back(QNAME.substr(pos, endPos-pos));
         pos = endPos + 1;
     }
-    qnameInfo.push_back(QNAME.substr(pos, endPos-pos));
+    qnameInfo.emplace_back(QNAME.substr(pos, endPos-pos));
 
     int32_t nColumns = static_cast<int32_t>(qnameInfo.size());
 

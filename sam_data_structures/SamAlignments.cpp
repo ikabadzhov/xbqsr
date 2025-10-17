@@ -9,7 +9,7 @@ void SamAlignments::Resize(size_t n) {
     POS.resize(n);
     FLAG.resize(n);
     MAPQ.resize(n);
-    QNAME.resize(n);
+    QNAME.Resize(n);
     TILE.resize(n);
     RNAME.resize(n);
     RNEXT.resize(n);
@@ -44,10 +44,14 @@ void SamAlignments::Permute(std::vector<size_t>& indices) {
     futures.emplace_back(std::async(std::launch::async, permute<int32_t>, std::ref(indices), std::ref(POS)));
     futures.emplace_back(std::async(std::launch::async, permute<uint16_t>, std::ref(indices), std::ref(FLAG)));
     futures.emplace_back(std::async(std::launch::async, permute<uint8_t>, std::ref(indices), std::ref(MAPQ)));
-    futures.emplace_back(std::async(std::launch::async, permute<int32_t>, std::ref(indices), std::ref(QNAME)));
+    //futures.emplace_back(std::async(std::launch::async, permute<int32_t>, std::ref(indices), std::ref(QNAME)));
     futures.emplace_back(std::async(std::launch::async, permute<tileInfo>, std::ref(indices), std::ref(TILE)));
     futures.emplace_back(std::async(std::launch::async, permute<int32_t>, std::ref(indices), std::ref(RNAME)));
     futures.emplace_back(std::async(std::launch::async, permute<int32_t>, std::ref(indices), std::ref(RNEXT)));
+
+    futures.emplace_back(std::async(std::launch::async, [&]() {
+        QNAME.Permute(indices);
+    }));
 
     futures.emplace_back(std::async(std::launch::async, [&]() {
         SEQ.Permute(indices);
@@ -95,7 +99,7 @@ void SamAlignments::SetAlnsNum(size_t n) {
     N_ALNS = n;
 }
 
-ssize_t SamAlignments::GetQNAME(size_t idx) const {
+std::string_view SamAlignments::GetQNAME(size_t idx) {
     return QNAME[idx];
 }
 
@@ -306,14 +310,14 @@ bool CoordinateLess(size_t idx1, size_t idx2, SamAlignments& reads) {
     if (SamAlignments::IsReversed(reads.FLAG[idx1]) != SamAlignments::IsReversed(reads.FLAG[idx2]) ) {
         return !SamAlignments::IsReversed(reads.FLAG[idx1]);
     }
-    if (QnameStringMapper::EMPTY_STRING != reads.QNAME[idx1] && QnameStringMapper::EMPTY_STRING != reads.QNAME[idx2]) {
+    /*if (QnameStringMapper::EMPTY_STRING != reads.QNAME[idx1] && QnameStringMapper::EMPTY_STRING != reads.QNAME[idx2]) {
         if( reads.QNAME[idx1] < reads.QNAME[idx2] ) {
             return true;
         }
         if ( reads.QNAME[idx1] > reads.QNAME[idx2] ) {
             return false;
         }
-    }
+    }*/
 
     uint16_t flag1 = modFlag(reads.FLAG[idx1]);
     uint16_t flag2 = modFlag(reads.FLAG[idx2]);

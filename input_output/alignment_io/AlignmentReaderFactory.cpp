@@ -13,8 +13,6 @@ std::unique_ptr<AlignmentReader> AlignmentReaderFactory::open(const std::string 
     if (SamStream::isBAMFile(fileStream)) {
         std::unique_ptr<InputStream> inputStream = std::make_unique<CompressedInputStream>(filename);
         return std::make_unique<BamReader>(std::move(inputStream));
-    } else {
-        std::unique_ptr<InputStream> inputStream = std::make_unique<PlainInputStream>(filename);
-        return std::make_unique<SamReader>(std::move(inputStream));
     }
+    throw std::runtime_error("File is not a valid BAM file");
 }

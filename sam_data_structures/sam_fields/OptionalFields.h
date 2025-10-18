@@ -12,7 +12,7 @@ public:
 
     std::vector<size_t> tagsBlobOff;
     std::vector<size_t> tagsBlobSize;
-    std::vector<std::byte> tagArena;
+    std::vector<uint8_t> tagArena;
     std::vector<int32_t> RG;
     //CompressedStringCollection RG;
 

@@ -3,25 +3,30 @@
 
 #include "../alignment_io/AlignmentIO.h"
 #include "../streams/OutputStream.h"
-#include "../streams/BufferWriter.h"
+#include "../../sam_data_structures/SamHeader.h"
 #include "../utils/Constant.h"
 #include <zlib.h>
 
 class BamWriter : public AlignmentWriter {
-    BufferWriter buffer;
-    std::string_view getslice(char delim, bool& isDelimFound);
-
 public:
-    explicit BamWriter(std::unique_ptr<OutputStream> outputStream, ssize_t buffSz = DEFAULT_BUFFER_SIZE) :
-                        AlignmentWriter(std::move(outputStream)),
-                        buffer(std::min(DEFAULT_BUFFER_SIZE, buffSz)) {}
+    // Construct with a concrete OutputStream (e.g., BGZFOutputStream)
+    BamWriter(std::unique_ptr<OutputStream> sink);
 
     void FormatHeader(Header& hdr) override;
-    void FormatAlignment(SamAlignments& reads) override;
+    void FormatAlignment(std::vector<SamAlignments> &reads) override;
     void Close() override;
 
-    ~BamWriter() override;
-};
+private:
 
+    static inline void push_u32(std::vector<uint8_t>& v, uint32_t x);
+    static inline void push_u16(std::vector<uint8_t>& v, uint16_t x);
+    static inline void push_u8 (std::vector<uint8_t>& v, uint8_t x);
+private:
+    std::unique_ptr<OutputStream> out_;
+    bool header_written_ = false;
+
+    // scratch buffer reused per record
+    std::vector<uint8_t> recbuf_;
+};
 
 #endif //GENOMICPIPELINE_BAMWRITER_H

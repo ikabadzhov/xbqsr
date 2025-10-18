@@ -30,11 +30,11 @@ public:
 
 class AlignmentWriter {
 protected:
-    std::unique_ptr<OutputStream> out; //TODO: Lets start with file only, then move to generic input source: file and/or stdout
+
 public:
-    explicit AlignmentWriter(std::unique_ptr<OutputStream> outStream) : out(std::move(outStream)) {};
+    AlignmentWriter() = default;
     virtual void FormatHeader(Header& hdr) = 0;
-    virtual void FormatAlignment(SamAlignments& reads) = 0;
+    virtual void FormatAlignment(std::vector<SamAlignments> &reads) = 0;
     virtual void Close() = 0;
 
     bool isEOF();

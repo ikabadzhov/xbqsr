@@ -4,8 +4,9 @@
 
 #include <string>
 #include <utility>
+#include <vector>
+
 #include "../streams/BufferReader.h"
-#include "../streams/BufferWriter.h"
 
 class IOBatch {
 
@@ -22,29 +23,27 @@ public:
 
 };
 
-class InputBatchSam {
+// Give this the same spirit as InputBatchBam, but for output.
+class OutputBatchBam {
 public:
-    BufferReader buffer;
-    std::string remaining;
-    size_t n_processed = 0;
-    bool header_to_process = true;
+    explicit OutputBatchBam(size_t cap) : buf_(cap), capacity_(cap) {}
 
-    explicit InputBatchSam(size_t size) : buffer(size) {};
+    uint8_t* data()                  { return buf_.data(); }
+    size_t   capacity()        const { return capacity_; }
+    size_t   used()            const { return used_; }
+    bool     empty()           const { return used_ == 0; }
 
-};
+    // Set the number of valid bytes and number of records for this batch
+    void seal(size_t bytes, size_t nrec) { used_ = bytes; n_records_ = nrec; }
 
-class OutputBatchSam {
-public:
-    std::string buffer;
-    std::string remaining;
-    size_t n_processed = 0;
-    size_t n_loaded = 0;
-    size_t n_written_in_buffer = 0;
-    size_t from = 0;
-    size_t to = 0;
+    // Reset to empty (caller will rewrite from offset 0)
+    void reset() { used_ = 0; n_records_ = 0; }
 
-    explicit OutputBatchSam(size_t size) : buffer(size, 0) {};
-
+private:
+    std::vector<uint8_t> buf_;
+    size_t capacity_{0};
+    size_t used_{0};
+    size_t n_records_{0};
 };
 
 #endif //GENOMICPIPELINE_IOBATCH_H

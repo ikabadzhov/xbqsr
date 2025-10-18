@@ -7,7 +7,7 @@
 #include "../../zlib.h"
 #include "OutputStream.h"
 
-class CompressedOutputStream : public OutputStream {
+class CompressedOutputStream {
     gzFile fileDescriptor;
     std::string path;
     z_stream strm{};
@@ -32,14 +32,6 @@ public:
         }
     }
 
-    bool bad() override;
-    const std::string & getFilePath() override;
-    bool eof() override;
-    bool good() override;
-    void close() override;
-    void write(std::string &buffer, ssize_t n) override;
-    void decompress();
-    void writeEOF();
 };
 
 

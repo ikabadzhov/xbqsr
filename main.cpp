@@ -5,7 +5,6 @@
 #include <tbb/parallel_sort.h>
 #include "Utils.h"
 #include "input_output/alignment_io/AlignmentIO.h"
-#include "input_output/sam_io/SamWriter.h"
 #include "sam_data_structures/SamHeader.h"
 #include "filters/Filter.h"
 #include "file_format/MappedFasta.h"
@@ -252,6 +251,7 @@ int main(int argc, char **argv) {
 
         baseRecalibratorTables->PrintBQSRTables(recal_filename, alignments[0].TAGS.RG, alignments[0].GetHdr());
     }
+
     if (applyBqsr) {
         print_stage_header("BQSR II - Apply Recalibration");
         t.reset();
@@ -267,20 +267,18 @@ int main(int argc, char **argv) {
 
         Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t.elapsed()) + " sec");
 
-    }
 
-    if (applyBqsr) {
         print_stage_header("Writing SAM File");
 
         std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(output_filename);
 
-        Logger::getLogger().log(LOG_INFO, "Start writing output file" + std::to_string(t.elapsed()) + " sec");
+        Logger::getLogger().log(LOG_INFO, "Start writing output file");
 
         t.reset();
 
         wf->FormatHeader(alignments[0].GetHdr());
 
-        wf->FormatAlignment(alignments[0]);
+        wf->FormatAlignment(alignments);
 
         Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t.elapsed()) + " sec");
     }

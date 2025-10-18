@@ -42,11 +42,10 @@ add_executable(bqsr main.cpp
 		data_types/StringCollection.cpp data_types/StringCollection.h
 		data_types/VectorCollection.cpp data_types/VectorCollection.h
 		data_types/TagsCollection.h data_types/BitVector.cpp data_types/BitVector.h
-		data_types/TagsCollection.cpp input_output/sam_io/SamWriter.cpp
+		data_types/TagsCollection.cpp
 		data_types/LIBIDStringMapper.cpp
 		data_types/RGStringMapper.cpp
-		input_output/sam_io/SamWriter.h input_output/sam_io/SamReader.cpp
-		input_output/sam_io/SamReader.h input_output/bam_io/BamReader.cpp
+		input_output/bam_io/BamReader.cpp
 		input_output/bam_io/BamReader.h input_output/bam_io/BamWriter.cpp
 		input_output/bam_io/BamWriter.h
 		bam_data_structures/BamHeader.cpp
@@ -62,8 +61,6 @@ add_executable(bqsr main.cpp
 		input_output/streams/InputStream.h
         input_output/streams/BufferReader.cpp
         input_output/streams/BufferReader.h
-		input_output/streams/BufferWriter.cpp
-		input_output/streams/BufferWriter.h
 		input_output/utils/ByteScanner.cpp
 		data_types/LinkedHashMap.h
 		sam_data_structures/sam_header_fields/ReadGroupField.cpp
@@ -148,6 +145,8 @@ add_executable(bqsr main.cpp
 		timer/Profiler.cpp
 		timer/Profiler.h
 		timer/ProfilerIO.h
+		input_output/streams/BGZFOutputStream.cpp
+		input_output/streams/BGZFOutputStream.h
 )
 
 target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB ${LIBDEFLATE_LIBRARY})

@@ -9,7 +9,7 @@
 static size_t compute_chunk_sz(const SequencesInput& in, const ComputeSkipSliceKernelData& kernel_data, size_t start_idx, size_t n_elements);
 
 
-SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
+SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, BaseRecalibratorTablesAccessor& table_acc, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements) : InputData(n_elements) {
         h_known_sites = known_sites.data();
         h_known_sites_ptr = known_sites_ptr.data();
         h_known_sites_ptr_sz = known_sites_ptr.size();
@@ -39,9 +39,10 @@ SequencesInput::SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong
         h_recalibrated = recalibrated;
         h_flag = flags;
         h_read_group_cov = read_group_cov;
-        h_sz_qual_score_cov = sz_qual_cov;
+        h_table_acc = table_acc;
+        /*h_sz_qual_score_cov = sz_qual_cov;
         h_sz_cycle_cov = sz_cycle_cov;
-        h_sz_context_cov = sz_context_cov;
+        h_sz_context_cov = sz_context_cov;*/
 }
 
 void ComputeSkipSliceKernelData::swap(ComputeSkipSliceKernelData &rhs) {
@@ -95,9 +96,7 @@ void ComputeSkipSliceKernelData::swap(ComputeSkipSliceKernelData &rhs) {
     std::swap(d_base_context, rhs.d_base_context);
     std::swap(d_base_context_ptr, rhs.d_base_context_ptr);
 
-    std::swap(d_sz_qual_score_cov, rhs.d_sz_qual_score_cov);
-    std::swap(d_sz_cycle_cov, rhs.d_sz_cycle_cov);
-    std::swap(d_sz_context_cov, rhs.d_sz_context_cov);
+    std::swap(d_table_acc, rhs.d_table_acc);
 
     std::swap(d_quality_table_indexes, rhs.d_quality_table_indexes);
     std::swap(d_cycle_table_indexes, rhs.d_cycle_table_indexes);
@@ -195,10 +194,11 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
             dest.d_cycle_table = src.s_cycle_table;
             dest.d_context_table = src.s_context_table;
 
-            dest.d_sz_qual_score_cov = src.h_sz_qual_score_cov;
+            /*dest.d_sz_qual_score_cov = src.h_sz_qual_score_cov;
             dest.d_sz_cycle_cov = src.h_sz_cycle_cov;
             dest.d_sz_context_cov = src.h_sz_context_cov;
-
+*/
+            dest.d_table_acc = src.h_table_acc;
             dest.d_quality_table_sz = src.s_quality_table_sz;
             dest.d_cycle_table_sz = src.s_cycle_table_sz;
             dest.d_context_table_sz = src.s_context_table_sz;

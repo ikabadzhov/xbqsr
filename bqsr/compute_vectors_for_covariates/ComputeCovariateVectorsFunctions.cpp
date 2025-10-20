@@ -287,9 +287,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     auto d_base_context = batch->_d_data.d_base_context;
     auto d_base_context_ptr = batch->_d_data.d_base_context_ptr;
 
-    auto d_sz_qual_score = batch->_d_data.d_sz_qual_score_cov;
-    auto d_sz_cycle_cov = batch->_d_data.d_sz_cycle_cov;
-    auto d_sz_context_cov = batch->_d_data.d_sz_context_cov;
+    auto d_table_accessor = batch->_d_data.d_table_acc;
 
     auto d_quality_table_indexes = batch->_d_data.d_quality_table_indexes;
     auto d_cycle_table_indexes = batch->_d_data.d_cycle_table_indexes;
@@ -651,7 +649,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         }
                         char qual = d_qualities[output_i];
 
-                        if (qual < minInterestingQual) {
+                        if (qual < MIN_INTERESTING_QUAL) {
                             //    continue;
                             return;
                         }
@@ -659,15 +657,15 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         int32_t errVal = d_snps[output_i];
 
                         bqsrTableKey key1(qual, 0, readGrpCov);
-                        auto idx1 = static_cast<int32_t>(BaseRecalibratorTables::getQualityScoresIdx(key1, d_sz_qual_score));
+                        auto idx1 = static_cast<int32_t>(d_table_accessor.getQualityScoresIdx(key1));
 
                         d_quality_table_indexes[output_i] = idx1;
                         d_quality_table_vals[output_i] = errVal;
 
-                        auto baseCycleCovariate = computeBaseCycleCovariate(cycleFactor, cycleIncrement, i, MAX_CYCLE);
+                        auto baseCycleCovariate = computeBaseCycleCovariate(cycleFactor, cycleIncrement, i, bqsr::defaults::MAX_CYCLE);
 
                         bqsrTableKey key2(qual, baseCycleCovariate, readGrpCov);
-                        auto idx2 = static_cast<int32_t>(BaseRecalibratorTables::getCycleCovIdx(key2, d_sz_qual_score, d_sz_cycle_cov));
+                        auto idx2 = static_cast<int32_t>(d_table_accessor.getCycleCovIdx(key2));
 
                         d_cycle_table_indexes[output_i] = idx2;
                         d_cycle_table_vals[output_i] = errVal;
@@ -675,7 +673,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
 
                         if (d_base_context_ptr[idx].len > 0 && d_base_context[output_i] >= 0) {
                             bqsrTableKey key3(qual, d_base_context[output_i], readGrpCov);
-                            auto idx3 = static_cast<int32_t>(BaseRecalibratorTables::getContextCovIdx(key3, d_sz_qual_score, d_sz_cycle_cov, d_sz_context_cov));
+                            auto idx3 = static_cast<int32_t>(d_table_accessor.getContextCovIdx(key3));
 
                             d_context_table_indexes[output_i] = idx3;
                             d_context_table_vals[output_i] = errVal;

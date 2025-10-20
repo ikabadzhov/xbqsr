@@ -8,6 +8,7 @@
 #include "../../sam_data_structures/sam_fields/Cigar.h"
 #include "../../intervals/Interval.h"
 #include "../TablesBQSR.h"
+#include "../BaseRecalibratorTablesAccessor.h"
 
 typedef int32_t val_t;
 typedef int32_t segment_t;
@@ -16,12 +17,6 @@ const size_t PAD = 8;
 
 class TablesOutput : public OutputData {
 public:
-//    int32_t* h_quality_table_indexes;
-//    int32_t* h_cycle_table_indexes;
-//    int32_t* h_context_table_indexes;
-//    val_t* h_quality_table_vals;
-//    val_t* h_cycle_table_vals;
-//    val_t* h_context_table_vals;
 
     explicit TablesOutput() = default;
 };
@@ -58,9 +53,10 @@ public:
     int32_t* h_read_group_cov;
     int32_t* h_rname;
     uint8_t* h_recalibrated;
-    int32_t h_sz_qual_score_cov;
+    /*int32_t h_sz_qual_score_cov;
     int32_t h_sz_cycle_cov;
-    int32_t h_sz_context_cov;
+    int32_t h_sz_context_cov;*/
+    BaseRecalibratorTablesAccessor h_table_acc;
 
     bqsrEntry* s_quality_table;
     size_t s_quality_table_sz;
@@ -70,7 +66,7 @@ public:
     size_t s_context_table_sz;
 
 
-    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, int32_t sz_qual_cov, int32_t sz_cycle_cov, int32_t sz_context_cov, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
+    explicit SequencesInput(mem_t<Interval>& known_sites, mem_t<SpanFieldLong>& known_sites_ptr, mem_t<uint8_t>& reference, mem_t<SpanFieldLong>& reference_ptr, bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, BaseRecalibratorTablesAccessor& table_acc, char* sequence, SpanField* sequence_ptr, char* qualities, SpanField* qualities_ptr, CigarOperation* cigar, SpanField* cigar_ptr, int32_t* pos, int32_t* rnext, int32_t* pnext, int32_t* tlen, int32_t* rname, uint8_t* recalibrated, uint16_t* flags, int32_t* read_group_cov, size_t n_elements);
  };
 
 
@@ -134,9 +130,11 @@ public:
     int32_t* d_base_context = nullptr;
     SpanField* d_base_context_ptr = nullptr;
 
-    int32_t d_sz_qual_score_cov = 0;
+    /*int32_t d_sz_qual_score_cov = 0;
     int32_t d_sz_cycle_cov = 0;
     int32_t d_sz_context_cov = 0;
+*/
+    BaseRecalibratorTablesAccessor d_table_acc;
 
     int32_t* d_quality_table_indexes = nullptr;
     int32_t* d_cycle_table_indexes = nullptr;

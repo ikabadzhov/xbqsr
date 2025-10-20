@@ -211,29 +211,27 @@ int main(int argc, char **argv) {
     std::unique_ptr<BaseRecalibrator> baseRecal;
     std::unique_ptr<BaseRecalibratorTables> baseRecalibratorTables;
 
-    size_t maxCycle = 500;
+    BQSRTableConfig bqsrTableConfig(header->getReadGroupRecord().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
 
     if (bqsr) {
         std::thread loader_fasta([&]() {
-            baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(header->getReadGroupRecord().size(), 94,
-                                                             maxCycle);
+            baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
             MappedFasta referenceGenome;
             referenceGenome.Open(reference_filename);
             baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, *header, *baseRecalibratorTables);
         });
         loader_fasta.join();
-    }
 
-    loader_sam.join();
 
-    for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
-        auto addREFID = Filter::AddREFID(alignments[batchIdx]);
-        for (size_t idx = 0; idx < alignments[batchIdx].GetAlnsNum(); idx++) {
-            addREFID(alignments[batchIdx], idx);
+        loader_sam.join();
+
+        for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
+            auto addREFID = Filter::AddREFID(alignments[batchIdx]);
+            for (size_t idx = 0; idx < alignments[batchIdx].GetAlnsNum(); idx++) {
+                addREFID(alignments[batchIdx], idx);
+            }
         }
-    }
 
-    if (bqsr) {
         print_stage_header("BQSR I - Recalibrate");
         t.reset();
 
@@ -242,9 +240,9 @@ int main(int argc, char **argv) {
         t.reset();
 
         for (size_t i = 0; i < alignments.size(); i++) {
-            baseRecal->Recalibrate(device, alignments[i], maxCycle);
+            baseRecal->Recalibrate(device, alignments[i]);
         }
-        baseRecal->getTables(*baseRecalibratorTables);
+        baseRecal->exportTables(*baseRecalibratorTables);
         baseRecalibratorTables->FinalizeBQSRTables();
 
         Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t.elapsed()) + " sec");
@@ -253,16 +251,24 @@ int main(int argc, char **argv) {
     }
 
     if (applyBqsr) {
+        loader_sam.join();
+
+        for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
+            auto addREFID = Filter::AddREFID(alignments[batchIdx]);
+            for (size_t idx = 0; idx < alignments[batchIdx].GetAlnsNum(); idx++) {
+                addREFID(alignments[batchIdx], idx);
+            }
+        }
+
         print_stage_header("BQSR II - Apply Recalibration");
         t.reset();
 
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
 
-        BaseRecalibratorTables baseRecalibratorTables(alignments[0].GetHdr().getReadGroupRecord().size(), 94,
-                                                      maxCycle);//TODO: Make the size as function of context size
+        BaseRecalibratorTables baseRecalibratorTables(bqsrTableConfig);
 
-        baseRecalibratorTables.ApplyBQSR(device, alignments[0], quantize_level, sqqList, maxCycle);
+        baseRecalibratorTables.ApplyBQSR(device, alignments[0], quantize_level, sqqList, bqsr::defaults::MAX_CYCLE);
 
 
         Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t.elapsed()) + " sec");

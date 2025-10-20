@@ -35,6 +35,7 @@ add_executable(bqsr main.cpp
         filters/UtilsFilters.cpp filters/UtilsFilters.h
 		file_format/MappedFasta.cpp file_format/MappedFasta.h
 		bqsr/TablesBQSR.h bqsr/TablesBQSR.cpp
+		bqsr/BaseRecalibratorTables.cpp bqsr/BaseRecalibratorTables.h
 		sam_data_structures/SamAlignments.cpp sam_data_structures/SamAlignments.h
 		sam_data_structures/sam_fields/OptionalFields.cpp sam_data_structures/sam_fields/OptionalFields.h
 		sam_data_structures/sam_fields/TmpFields.cpp sam_data_structures/sam_fields/TmpFields.h
@@ -147,6 +148,8 @@ add_executable(bqsr main.cpp
 		timer/ProfilerIO.h
 		input_output/streams/BGZFOutputStream.cpp
 		input_output/streams/BGZFOutputStream.h
+		bqsr/BaseRecalibratorTablesAccessor.cpp
+		bqsr/BaseRecalibratorTablesAccessor.h
 )
 
 target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB ${LIBDEFLATE_LIBRARY})

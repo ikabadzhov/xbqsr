@@ -1,4 +1,6 @@
 #include "ApplyBqsrKernelData.h"
+
+#include "../BaseRecalibratorTablesAccessor.h"
 #include "../../timer/Timer.h"
 #include "../../logger/Logger.h"
 
@@ -8,7 +10,7 @@ static size_t global_chunk_offset = 0;
 
 size_t compute_chunk_sz(const ApplyBqsrSequencesInput& in, const AppyBqsrKernelData& kernel_data, size_t start_idx, size_t n_elements);
 
-ApplyBqsrSequencesInput::ApplyBqsrSequencesInput(bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, size_t quality_table_dim, size_t cycle_table_dim, size_t context_table_dim,
+ApplyBqsrSequencesInput::ApplyBqsrSequencesInput(bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, BaseRecalibratorTablesAccessor& table_acc,
                             char* sequences, SpanField* sequence_ptrs, uint8_t* qualities, uint16_t* flags, int32_t* read_group, combinedBqsrEntry* combined_bqsr_table, size_t combined_bqsr_table_size,
                             uint8_t* quantized_quality_scores, size_t quantized_quality_scores_size, uint8_t* static_quantized_quality_scores, size_t static_quantized_quality_scores_size, int* recalibrated_score_cache, size_t n_elements) : InputData(n_elements) {
 
@@ -18,13 +20,14 @@ ApplyBqsrSequencesInput::ApplyBqsrSequencesInput(bqsrEntry* quality_table, bqsrE
     h_context_table = context_table;
 
     sz_qual_score_cov = quality_table_sz;
-    dim_qual_score_cov = quality_table_dim;
+
 
     sz_cycle_cov = cycle_table_sz;
-    dim_cycle_cov = cycle_table_dim;
+
 
     sz_context_cov = context_table_sz;
-    dim_context_cov = context_table_dim;
+
+    h_table_acc = table_acc;
 
     h_sequences = sequences;
     h_sequences_ptr = sequence_ptrs;
@@ -60,9 +63,7 @@ void AppyBqsrKernelData::swap(AppyBqsrKernelData& rhs){
     std::swap(d_base_context, rhs.d_base_context);
     std::swap(d_base_context_ptr, rhs.d_base_context_ptr);
 
-    std::swap(dim_qual_score_cov, rhs.dim_qual_score_cov);
-    std::swap(dim_cycle_cov, rhs.dim_cycle_cov);
-    std::swap(dim_context_cov, rhs.dim_context_cov);
+    std::swap(d_table_acc, rhs.d_table_acc);
 
     std::swap(chunk_sz, rhs.chunk_sz);
     std::swap(prev_batch_max_index, rhs.prev_batch_max_index);
@@ -110,9 +111,6 @@ AppyBqsrKernelData::~AppyBqsrKernelData() {
     d_temporary_segments_sequences_offsets = nullptr;
 
     max_memory = 0;
-    dim_qual_score_cov = 0;
-    dim_cycle_cov = 0;
-    dim_context_cov = 0;
     chunk_sz = 0;
     prev_batch_max_index = 0;
     static_quantized_scores_size = 0;
@@ -176,9 +174,7 @@ void AppyBqsrKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue, AppyBqs
 
             transfer_queue.wait();
 
-            dest.dim_qual_score_cov = src.dim_qual_score_cov;
-            dest.dim_cycle_cov = src.dim_cycle_cov;
-            dest.dim_context_cov = src.dim_context_cov;
+            dest.d_table_acc = src.h_table_acc;
             dest.combined_bqsr_table_size = src.combined_bqsr_table_size;
             dest.quantized_quality_scores_size = src.quantized_quality_scores_size;
             dest.static_quantized_scores_size = src.static_quantized_quality_scores_size;

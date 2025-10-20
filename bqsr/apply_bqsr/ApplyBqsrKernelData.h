@@ -1,5 +1,6 @@
 #ifndef APPLYBQSRKERNELDATA_H
 #define APPLYBQSRKERNELDATA_H
+#include "../BaseRecalibratorTablesAccessor.h"
 #include "../TablesBQSR.h"
 #include "../../device/batch.h"
 #include "../../data_types/VectorCollection.h"
@@ -20,9 +21,7 @@ public:
     int32_t sz_cycle_cov;
     int32_t sz_context_cov;
 
-    int32_t dim_qual_score_cov;
-    int32_t dim_cycle_cov;
-    int32_t dim_context_cov;
+    BaseRecalibratorTablesAccessor h_table_acc;
 
     bqsrEntry* h_quality_table;
     bqsrEntry* h_cycle_table;
@@ -39,7 +38,7 @@ public:
 
     int* d_recalibrated_score_cache;
 
-    ApplyBqsrSequencesInput(bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, size_t quality_table_dim, size_t cycle_table_dim, size_t context_table_dim,
+    ApplyBqsrSequencesInput(bqsrEntry* quality_table, bqsrEntry* cycle_table, bqsrEntry* context_table, size_t quality_table_sz, size_t cycle_table_sz, size_t context_table_sz, BaseRecalibratorTablesAccessor& table_acc,
                             char* sequences, SpanField* sequence_ptrs, uint8_t* qualities, uint16_t* flags, int32_t* read_group, combinedBqsrEntry* combined_bqsr_table, size_t combined_bqsr_table_size,
                             uint8_t* quantized_quality_scores, size_t quantized_quality_scores_size, uint8_t* static_quantized_quality_scores, size_t static_quantized_quality_scores_size, int* recalibrated_score_cache, size_t n_elements);
 };
@@ -84,9 +83,7 @@ public:
     int32_t* d_base_context = nullptr;
     SpanField* d_base_context_ptr = nullptr;
 
-    int32_t dim_qual_score_cov = 0;
-    int32_t dim_cycle_cov = 0;
-    int32_t dim_context_cov = 0;
+    BaseRecalibratorTablesAccessor d_table_acc;
 
     size_t chunk_sz = 0;
     int32_t prev_batch_max_index = 0;

@@ -2,10 +2,6 @@
 #include <execution>
 #include <mutex>
 #include "BamReader.h"
-
-#include <oneapi/dpl/functional>
-#include <oneapi/tbb/parallel_scan.h>
-
 #include "BamUtilsIO.h"
 #include "../../timer/ProfilerIO.h"
 #include "../parser/SamHeaderParser.h"

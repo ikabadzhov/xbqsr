@@ -6,6 +6,7 @@
 #include "TablesBQSR.h"
 #include "../sam_data_structures/SamAlignments.h"
 #include "../sam_data_structures/SamHeader.h"
+#include "../sycl_parallel_library/memory/memory.h"
 
 constexpr int32_t INVALID_INDEX = INT32_MAX - 1;
 
@@ -85,17 +86,18 @@ public:
 
     void initializeCombinedBQSRTable(bqsrTable& bqsrTable, std::vector<combinedBqsrEntry>& table);
     void FinalizeBQSRTables();
-    void ApplyBQSR(sycl::device& device, SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList,
-                   int32_t maxCycle);
+    void ApplyBQSR(sycl::device& device, SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList);
 
-    void
-    PrintBQSRTables(const std::string &filename, std::vector<int32_t>& RG, Header &hdr);
+    void PrintBQSRTables(const std::string &filename, std::vector<int32_t>& RG, Header &hdr);
+    void LoadFromReport(const std::string &filename, Header &hdr);
 
 private:
     void printOtherCovariateTable(std::ostream& file, Header &hdr);
+
+
     void printBQSRTable(std::ofstream& filename, Header &hdr);
     void printQuantizationTable(std::ofstream &file);
-    void printCombinedBQSRTable(std::ostream &file, std::vector<int32_t>& RG, Header &hdr);
+    void printCombinedBQSRTable(std::ostream &file, Header &hdr);
 
 private:
     // --- configuration (runtime-const) ---
@@ -112,6 +114,13 @@ private:
     bqsrTable QualityScores_;    // size = RG * Q
     bqsrTable Cycles_;           // size = RG * Q * nCycleCov
     bqsrTable Contexts_;         // size = RG * Q * nContextCov
+
+    std::vector<combinedBqsrEntry> combinedBQSRTable;
+    std::vector<uint8_t> staticQuantizedScores;
+    std::vector<int64_t> quantizationMap;
+    std::vector<uint8_t> quantizedQualityScores;
+    mem_t<int> recalibrated_quality_scores;
+    bool is_apply_bqsr_initialized = false;
 };
 
 

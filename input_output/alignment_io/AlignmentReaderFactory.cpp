@@ -1,8 +1,4 @@
-#include <string_view>
-
 #include "AlignmentReaderFactory.h"
-#include "../../zlib.h"
-#include "../sam_io/SamReader.h"
 #include "../streams/SamStream.h"
 #include "../bam_io/BamReader.h"
 

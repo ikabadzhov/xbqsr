@@ -28,7 +28,8 @@ void init_options( po::options_description &description, bool &help ){
             "input", po::value<string>(), "arg")(
             "output", po::value<string>(), "arg")(
             "bqsr", po::value<string>(), " recal-file" )(
-                "known-sites", po::value<string>(), " site-file" )(
+            "applyBqsr", po::value<string>(), " recal-file" )(
+            "known-sites", po::value<string>(), " site-file" )(
             "reference", po::value<string>(), "fasta-file"
     );
 

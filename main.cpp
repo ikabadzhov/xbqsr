@@ -38,7 +38,6 @@ size_t get_duration(std::chrono::system_clock::time_point start, std::chrono::sy
 
 //[[clang::optnone]]
 int main(int argc, char **argv) {
-    Timer t;
     bool help{};
     namespace po = boost::program_options;
     po::options_description description("GenomicPipeline [options]" );
@@ -61,7 +60,7 @@ int main(int argc, char **argv) {
     //bool filter_non_exact_mapping_reads = false;
     //bool filter_non_overlapping_reads = false;
     //bool replace_read_group = false;
-    bool mark_duplicates = false;
+    //bool mark_duplicates = false;
     //bool mark_optical_duplicates = false;
     //bool optical_duplicates_pixel_distance = false;
     //bool remove_optional_fields = false;
@@ -200,28 +199,32 @@ int main(int argc, char **argv) {
 
 
     std::thread loader_sam([&]() {
-        t.reset();
+        Timer t_in_sam;
+        t_in_sam.reset();
         print_stage_header("Reading SAM File");
-        size_t nAlns = alignmentReader->ParseAlignment(alignments, header);
-        //assert(nAlns == alignments.GetAlnsNum());
+        alignmentReader->ParseAlignment(alignments, header);
 
-        Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t.elapsed()) + " sec");
+        Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t_in_sam.elapsed()) + " sec");
     });
 
-    std::unique_ptr<BaseRecalibrator> baseRecal;
+
     std::unique_ptr<BaseRecalibratorTables> baseRecalibratorTables;
 
     BQSRTableConfig bqsrTableConfig(header->getReadGroupRecord().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
 
     if (bqsr) {
+        std::unique_ptr<BaseRecalibrator> baseRecal;
+
         std::thread loader_fasta([&]() {
+            Timer t_in_ref;
+            t_in_ref.reset();
             baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
             MappedFasta referenceGenome;
             referenceGenome.Open(reference_filename);
             baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, *header, *baseRecalibratorTables);
+            Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t_in_ref.elapsed()) + " sec");
         });
         loader_fasta.join();
-
 
         loader_sam.join();
 
@@ -233,11 +236,9 @@ int main(int argc, char **argv) {
         }
 
         print_stage_header("BQSR I - Recalibrate");
-        t.reset();
 
-        Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t.elapsed()) + " sec");
-
-        t.reset();
+        Timer t_recal;
+        t_recal.reset();
 
         for (size_t i = 0; i < alignments.size(); i++) {
             baseRecal->Recalibrate(device, alignments[i]);
@@ -245,13 +246,24 @@ int main(int argc, char **argv) {
         baseRecal->exportTables(*baseRecalibratorTables);
         baseRecalibratorTables->FinalizeBQSRTables();
 
-        Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t.elapsed()) + " sec");
+        Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t_recal.elapsed()) + " sec");
 
-        baseRecalibratorTables->PrintBQSRTables(recal_filename, alignments[0].TAGS.RG, alignments[0].GetHdr());
+        baseRecalibratorTables->PrintBQSRTables(recal_filename, alignments[0].TAGS.RG, *header);
     }
 
     if (applyBqsr) {
+        Timer t_apply;
+        t_apply.reset();
+
+        baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
+        baseRecalibratorTables->LoadFromReport(recal_filename, *header);
+
+        Logger::getLogger().log(LOG_INFO, "Time to load BQSR table from file: " + std::to_string(t_apply.elapsed()) + " sec");
+
         loader_sam.join();
+
+        t_apply.reset();
+        print_stage_header("BQSR II - Apply Recalibration");
 
         for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
             auto addREFID = Filter::AddREFID(alignments[batchIdx]);
@@ -260,33 +272,25 @@ int main(int argc, char **argv) {
             }
         }
 
-        print_stage_header("BQSR II - Apply Recalibration");
-        t.reset();
-
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
 
-        BaseRecalibratorTables baseRecalibratorTables(bqsrTableConfig);
+        for (size_t i = 0; i < alignments.size(); i++) {
+            baseRecalibratorTables->ApplyBQSR(device, alignments[i], quantize_level, sqqList);
+        }
 
-        baseRecalibratorTables.ApplyBQSR(device, alignments[0], quantize_level, sqqList, bqsr::defaults::MAX_CYCLE);
+        Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t_apply.elapsed()) + " sec");
 
-
-        Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t.elapsed()) + " sec");
-
-
+        Timer t_out;
+        t_out.reset();
         print_stage_header("Writing SAM File");
 
         std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(output_filename);
 
-        Logger::getLogger().log(LOG_INFO, "Start writing output file");
-
-        t.reset();
-
-        wf->FormatHeader(alignments[0].GetHdr());
-
+        wf->FormatHeader(*header);
         wf->FormatAlignment(alignments);
 
-        Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t.elapsed()) + " sec");
+        Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t_out.elapsed()) + " sec");
     }
     return 0;
 }

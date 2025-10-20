@@ -28,6 +28,51 @@ public:
     ~OutputData() = default;
 };
 
+// Small helpers
+inline size_t align_up(size_t x, size_t a) {
+    const size_t m = a - 1;
+    return (x + m) & ~m;
+}
+
+template <class T>
+inline T* alloc_and_copy(sycl::queue& q,
+                         char* base,
+                         size_t& offset,
+                         const T* src,
+                         size_t count)
+{
+    const size_t align = alignof(T);
+    const size_t aligned = align_up(offset, align);
+    const size_t bytes = count * sizeof(T);
+
+    T* dst = reinterpret_cast<T*>(base + aligned);
+    if (src && count) {
+        q.memcpy(dst, src, bytes);
+    }
+    offset = aligned + bytes;
+    return dst;
+}
+
+template <class T>
+inline T* alloc_simple(char* base,
+                       size_t& offset,
+                       size_t count)
+{
+    const size_t align = alignof(T);
+    const size_t aligned = align_up(offset, align);
+    const size_t bytes = count * sizeof(T);
+
+    T* dst = reinterpret_cast<T*>(base + aligned);
+    offset = aligned + bytes;
+    return dst;
+}
+
+template <class T>
+inline void simulate_alloc(size_t& offset, size_t count) noexcept {
+    offset = align_up(offset, alignof(T));
+    offset += count * sizeof(T);
+}
+
 template <typename kernel_data_t>
 concept HasQueueMember = requires(kernel_data_t t) {
     { t._q } -> std::same_as<sycl::queue&>;

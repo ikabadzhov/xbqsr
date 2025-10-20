@@ -54,7 +54,9 @@ public:
     }
 
     ~mem_t() {
-        sycl::free(_pointer, _q);
+        if (_pointer) {
+            sycl::free(_pointer, _q);
+        }
         _pointer = nullptr;
         _size = 0;
         _q.wait_and_throw();

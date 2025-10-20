@@ -1,6 +1,8 @@
 #include <sycl/queue.hpp>
 #include "../timer/Timer.h"
 #include "BaseRecalibratorTables.h"
+
+#include "UtilsBQSR.h"
 #include "../Config.h"
 
 #include "apply_bqsr/ApplyBqsrFunctions.h"
@@ -79,27 +81,30 @@ void BaseRecalibratorTables::FinalizeBQSRTables() {
     }
 }
 
-void BaseRecalibratorTables::ApplyBQSR(sycl::device& device, SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList,
-                                       int32_t maxCycle) {
+void BaseRecalibratorTables::ApplyBQSR(sycl::device& device, SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList) {
     Timer t;
 
     sycl::queue q(device);
 
-    std::vector<combinedBqsrEntry> combinedBQSRTable(reads.GetHdr().getReadGroupRecord().size());
-    initializeCombinedBQSRTable(this->QualityScores_, combinedBQSRTable);
+    if (!is_apply_bqsr_initialized) {
+        reads.TMP.reads_group_covariate_.Resize(reads.GetAlnsNum());
+        tbb::parallel_for(0UL, reads.GetAlnsNum(), [&](size_t idx) {
+            reads.TMP.reads_group_covariate_.Set(idx, readGroupCovariate(reads.GetHdr(), reads, idx));
+        });
 
-    std::vector<uint8_t> staticQuantizedScores;
-    if (!sqqList.empty()) {
-        staticQuantizedScores = initializeStaticQuantizedScores(sqqList);
+        combinedBQSRTable.resize(reads.GetHdr().getReadGroupRecord().size());
+        initializeCombinedBQSRTable(this->QualityScores_, combinedBQSRTable);
+
+        if (!sqqList.empty()) {
+            staticQuantizedScores = initializeStaticQuantizedScores(sqqList);
+        }
+
+        initializeQuantizedQualityScores(this->QualityScores_, quantizeLevels, quantizationMap, quantizedQualityScores);
+
+        recalibrated_quality_scores = mem_t<int>(nReadGroups * nQualScore * nCycleCov * (nContextCov+1), q, memory_space_device);
+        q.fill(recalibrated_quality_scores.data(), -1, recalibrated_quality_scores.size()).wait();
+        is_apply_bqsr_initialized = true;
     }
-
-    std::vector<int64_t> quantizationMap;
-    std::vector<uint8_t> quantizedQualityScores;
-    initializeQuantizedQualityScores(this->QualityScores_, quantizeLevels, quantizationMap, quantizedQualityScores);
-
-
-    mem_t<int> recalibrated_quality_scores(nReadGroups * nQualScore * nCycleCov * (nContextCov+1), q, memory_space_device);
-    q.fill(recalibrated_quality_scores.data(), -1, recalibrated_quality_scores.size()).wait();
 
     t.reset();
 
@@ -128,8 +133,8 @@ void BaseRecalibratorTables::ApplyBQSR(sycl::device& device, SamAlignments &read
 
     // Set up your configuration using available device memory
     AppyBqsrKernelConfiguration config;
-    size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
-    config.max_memory = available_mem / 2;
+    size_t available_mem = q.get_device().get_info<sycl::info::device::global_mem_size>();
+    config.max_memory = available_mem / 3;
 
     // Create temporary kernel data for this batch to compute the max elements
     AppyBqsrKernelData tmp_kernel_data(q, config, memory_space_t::none);
@@ -437,7 +442,7 @@ void BaseRecalibratorTables::PrintBQSRTables(const std::string &filename, std::v
     file << "\n";
 
     printQuantizationTable(file);
-    printCombinedBQSRTable(file, RG, hdr);
+    printCombinedBQSRTable(file, hdr);
     printBQSRTable(file, hdr);
     printOtherCovariateTable(file, hdr);
 }
@@ -476,7 +481,7 @@ void BaseRecalibratorTables::printQuantizationTable(std::ofstream &file) {
     file << "\n";
 }
 
-void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, std::vector<int32_t>& RG, Header &hdr) {
+void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, Header &hdr) {
     std::vector<combinedBqsrEntry> table(hdr.getReadGroupRecord().size()); // Table mapping from read groups to entries
     auto table_acc = make_accessor();
     initializeCombinedBQSRTable(QualityScores_, table);
@@ -513,7 +518,7 @@ void BaseRecalibratorTables::printCombinedBQSRTable(std::ostream &file, std::vec
          << "  " << std::left << std::setw(static_cast<int32_t>(maxLenErrors)) << errorsString << "\n";
 
     std::sort(readGroups.begin(), readGroups.end(), [&](auto& e1, auto& e2){
-        return hdr.getReadGroupRecord().getString(RG[e1]) < hdr.getReadGroupRecord().getString(RG[e2]);
+        return hdr.getReadGroupRecord().getString(e1) < hdr.getReadGroupRecord().getString(e2);
     });
 
     for ( auto &rg : readGroups) {
@@ -692,3 +697,189 @@ void BaseRecalibratorTables::printOtherCovariateTable(std::ostream& file, Header
     file << "\n";
 }
 
+// --- small helpers ----------------------------------------------------------
+static inline uint32_t baseToIndex(char b) {
+    switch (b) {
+        case 'A': case 'a': return 0;
+        case 'C': case 'c': return 1;
+        case 'G': case 'g': return 2;
+        case 'T': case 't': return 3;
+        default:
+            Logger::getLogger().log(LOG_FATAL, std::string("LoadFromReport: invalid base '") + b + "'");
+            std::abort();
+    }
+}
+
+// pack a context string to the same integer key used by keyToString()
+static inline int32_t contextStringToKey(const std::string& ctx) {
+    const size_t L = ctx.size();
+    if (L == 0 || L > 15) {
+        Logger::getLogger().log(LOG_FATAL, "LoadFromReport: context length out of range (1..15)");
+        std::abort();
+    }
+    int32_t realKey = 0;
+    // NOTE: keyToString() encodes least-significant 2 bits as the first character (i==0).
+    // When printing, it iterates i=0..L-1 doing realKey&0x3 then >>2.
+    // To invert, we place ctx[i] at bits [2*i +: 2].
+    for (size_t i = 0; i < L; ++i) {
+        realKey |= static_cast<int32_t>(baseToIndex(ctx[i])) << (2 * i);
+    }
+    return (realKey << 4) | static_cast<int32_t>(L & 0xF);
+}
+
+static inline int32_t cycleToEncoded(int32_t cycle) {
+    // same encoding you used when printing:
+    // sign bit in LSB: 0 => non-negative, 1 => negative; value in the higher bits, shifted by 1
+    if (cycle >= 0) return (cycle << 1) | 0;
+    return ((-cycle) << 1) | 1;
+}
+
+static inline std::string trim(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e-1]))) --e;
+    return s.substr(b, e - b);
+}
+
+// Read a possibly “12.00” number into int64_t safely
+static inline int64_t parseIntLike(const std::string& tok) {
+    // try integer fast path
+    bool all_digits = !tok.empty() && std::all_of(tok.begin(), tok.end(), [](char c){ return std::isdigit((unsigned char)c); });
+    if (all_digits) return static_cast<int64_t>(std::stoll(tok));
+    // fallback: double -> llround
+    return static_cast<int64_t>(std::llround(std::stod(tok)));
+}
+
+void BaseRecalibratorTables::LoadFromReport(const std::string& filename, Header& hdr) {
+    std::ifstream in(filename);
+    if (!in) {
+        Logger::getLogger().log(LOG_FATAL, "LoadFromReport: cannot open file: " + filename);
+        std::abort();
+    }
+
+    // map RG string -> RG index (as in header)
+    std::unordered_map<std::string, int32_t> rgIndex;
+    const auto rgCount = hdr.getReadGroupRecord().size();
+    rgIndex.reserve(rgCount);
+    for (int32_t rg = 0; rg < static_cast<int32_t>(rgCount); ++rg) {
+        rgIndex.emplace(hdr.getReadGroupRecord().getString(rg), rg);
+    }
+
+    enum class Section { None, RecalTable1, RecalTable2 };
+    Section section = Section::None;
+
+    auto acc = make_accessor();
+
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::string s = trim(line);
+        if (s.empty()) { section = Section::None; continue; }
+
+        // detect section starts
+        if (s.rfind("#:", 0) == 0) {
+            // table sentinels that matter for ApplyBQSR
+            if (s.find("Table:RecalTable1:") != std::string::npos) {
+                section = Section::RecalTable1;
+            } else if (s.find("Table:RecalTable2:") != std::string::npos) {
+                section = Section::RecalTable2;
+            } else {
+                // any other meta line (quantization / arguments / RecalTable0, etc.)
+                // skip but reset to None so we don't parse their headers as data
+                if (s.find("Table:") != std::string::npos) section = Section::None;
+            }
+            continue;
+        }
+
+        // skip column headers
+        if (s.find("ReadGroup") != std::string::npos && s.find("QualityScore") != std::string::npos) {
+            continue;
+        }
+        if (s.find("ReadGroup") != std::string::npos && s.find("CovariateValue") != std::string::npos) {
+            continue;
+        }
+
+        // parse rows
+        if (section == Section::RecalTable1) {
+            // Columns:
+            // RG  Q  EventType(M)  EmpQ  Observations  Errors
+            std::istringstream iss(s);
+            std::string rgStr, eventType;
+            int q = 0;
+            double empQ = 0.0;
+            std::string obsTok, errTok;
+
+            if (!(iss >> rgStr >> q >> eventType >> empQ >> obsTok >> errTok)) {
+                // be tolerant: some writers pad differently, try again reading all tokens
+                continue;
+            }
+            if (eventType != "M") continue; // only mismatches used by your code
+
+            auto rgIt = rgIndex.find(rgStr);
+            if (rgIt == rgIndex.end()) continue; // unknown RG; skip
+
+            bqsrTableKey key{};
+            key.ReadGroup = static_cast<uint16_t>(rgIt->second);
+            key.Qual      = static_cast<uint8_t>(q);
+            key.Covariate = 0;
+
+            const auto idx = acc.getQualityScoresIdx(key);
+            if (idx < 0 || static_cast<size_t>(idx) >= QualityScores_.table.size()) continue;
+
+            bqsrEntry& e = QualityScores_.table[static_cast<size_t>(idx)];
+            e.Observations = parseIntLike(obsTok);
+            e.Mismatches   = parseIntLike(errTok);
+            // empirical_qualities will be recomputed in FinalizeBQSRTables()
+        }
+        else if (section == Section::RecalTable2) {
+            // Columns:
+            // RG  Q  CovValue  CovName(Context|Cycle)  M  EmpQ  Obs  Err
+            std::istringstream iss(s);
+            std::string rgStr, covValue, covName, eventType;
+            int q = 0;
+            double empQ = 0.0;
+            std::string obsTok, errTok;
+
+            if (!(iss >> rgStr >> q >> covValue >> covName >> eventType >> empQ >> obsTok >> errTok)) {
+                continue;
+            }
+            if (eventType != "M") continue;
+
+            auto rgIt = rgIndex.find(rgStr);
+            if (rgIt == rgIndex.end()) continue;
+
+            bqsrTableKey key{};
+            key.ReadGroup = static_cast<uint16_t>(rgIt->second);
+            key.Qual      = static_cast<uint8_t>(q);
+
+            if (covName == "Cycle") {
+                // covValue is a signed integer string (e.g., "-12", "34")
+                const int cyc = std::stoi(covValue);
+                key.Covariate = static_cast<uint32_t>(cycleToEncoded(cyc));
+
+                const auto idx = acc.getCycleCovIdx(key);
+                if (idx < 0 || static_cast<size_t>(idx) >= Cycles_.table.size()) continue;
+
+                bqsrEntry& e = Cycles_.table[static_cast<size_t>(idx)];
+                e.Observations = parseIntLike(obsTok);
+                e.Mismatches   = parseIntLike(errTok);
+            } else if (covName == "Context") {
+                // covValue is context string like "AC", "TT", etc.
+                key.Covariate = static_cast<uint32_t>(contextStringToKey(covValue));
+
+                const auto idx = acc.getContextCovIdx(key);
+                if (idx < 0 || static_cast<size_t>(idx) >= Contexts_.table.size()) continue;
+
+                bqsrEntry& e = Contexts_.table[static_cast<size_t>(idx)];
+                e.Observations = parseIntLike(obsTok);
+                e.Mismatches   = parseIntLike(errTok);
+            } else {
+                // Unknown covariate — ignore
+                continue;
+            }
+        }
+    }
+
+    // Compute empirical qualities from what we loaded
+    FinalizeBQSRTables();
+    Logger::getLogger().log(LOG_INFO, "Loaded BQSR tables from file: " + filename);
+}

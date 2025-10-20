@@ -1,8 +1,8 @@
 #ifndef GENOMICPIPELINE_SAMHEADERPARSER_H
 #define GENOMICPIPELINE_SAMHEADERPARSER_H
 
-#include "../sam_io/SamReader.h"
 #include "ParsedHeaderLine.h"
+#include "../../sam_data_structures/SamHeader.h"
 
 namespace SamHeaderParser {
     void ParseSamHeaderFromSlice(Header &hdr, const std::string& bytes, bool first = false);

@@ -120,206 +120,148 @@ void AppyBqsrKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue, AppyBqs
                                             size_t src_offset, size_t n_elements) {
     Timer t;
     t.reset();
-    try {
-        char *base = static_cast<char *>(dest.memory_buffer);
-        size_t offset = 0;
+    char*  base   = static_cast<char*>(dest.memory_buffer);
+    size_t offset = 0;
 
+    try {
+        // ------------------------------------------------------------------
+        // Constant region (copied once per run)
+        // ------------------------------------------------------------------
         if (dest.is_first_copy) {
             dest.d_recalibrated_score_cache = src.d_recalibrated_score_cache;
 
-            dest.d_quality_table = reinterpret_cast<bqsrEntry*>(base + offset);
-            size_t sz = src.sz_qual_score_cov * sizeof(src.h_quality_table[0]);
-            transfer_queue.memcpy(dest.d_quality_table, src.h_quality_table, sz);
-            offset += sz;
+            // Quality table
+            dest.d_quality_table =
+                alloc_and_copy<bqsrEntry>(transfer_queue, base, offset,
+                                          src.h_quality_table, src.sz_qual_score_cov);
 
-            size_t alignment = alignof(decltype(dest.d_cycle_table[0]));
-            size_t padding = (alignment - (offset % alignment)) % alignment;
-            offset += padding;
-            dest.d_cycle_table = reinterpret_cast<bqsrEntry*>(base + offset);
-            sz = src.sz_cycle_cov * sizeof(src.h_cycle_table[0]);
-            transfer_queue.memcpy(dest.d_cycle_table, src.h_cycle_table, sz);
-            offset += sz;
+            // Cycle table
+            dest.d_cycle_table =
+                alloc_and_copy<bqsrEntry>(transfer_queue, base, offset,
+                                          src.h_cycle_table, src.sz_cycle_cov);
 
-            alignment = alignof(decltype(dest.d_context_table[0]));
-            padding = (alignment - (offset % alignment)) % alignment;
-            offset += padding;
-            dest.d_context_table = reinterpret_cast<bqsrEntry*>(base + offset);
-            sz = src.sz_context_cov * sizeof(src.h_context_table[0]);
-            transfer_queue.memcpy(dest.d_context_table, src.h_context_table, src.sz_context_cov * sizeof(src.h_context_table[0]));
-            offset += sz;
+            // Context table
+            dest.d_context_table =
+                alloc_and_copy<bqsrEntry>(transfer_queue, base, offset,
+                                          src.h_context_table, src.sz_context_cov);
 
-            alignment = alignof(decltype(dest.d_combined_bqsr_table[0]));
-            padding = (alignment - (offset % alignment)) % alignment;
-            offset += padding;
-            dest.d_combined_bqsr_table = reinterpret_cast<combinedBqsrEntry*>(base + offset);
-            sz = src.combined_bqsr_table_size * sizeof(src.h_combined_bqsr_table[0]);
-            transfer_queue.memcpy(dest.d_combined_bqsr_table, src.h_combined_bqsr_table, sz);
-            offset += sz;
+            // Combined BQSR table
+            dest.d_combined_bqsr_table =
+                alloc_and_copy<combinedBqsrEntry>(transfer_queue, base, offset,
+                                                  src.h_combined_bqsr_table, src.combined_bqsr_table_size);
 
-            alignment = alignof(decltype(dest.d_static_quantized_scores[0]));
-            padding = (alignment - (offset % alignment)) % alignment;
-            offset += padding;
-            dest.d_static_quantized_scores = reinterpret_cast<uint8_t*>(base + offset);
-            sz = src.static_quantized_quality_scores_size * sizeof(src.h_static_quantized_quality_scores[0]);
-            transfer_queue.memcpy(dest.d_static_quantized_scores, src.h_static_quantized_quality_scores, sz);
-            offset += sz;
+            // Static quantized scores (optional)
+            if (src.static_quantized_quality_scores_size > 0) {
+                dest.d_static_quantized_scores =
+                    alloc_and_copy<uint8_t>(transfer_queue, base, offset,
+                                            src.h_static_quantized_quality_scores,
+                                            src.static_quantized_quality_scores_size);
+            } else {
+                // still advance offset by 0 so layout is consistent
+                dest.d_static_quantized_scores =
+                    alloc_simple<uint8_t>(base, offset, /*count=*/0);
+            }
 
-            alignment = alignof(decltype(dest.d_quantized_quality_scores[0]));
-            padding = (alignment - (offset % alignment)) % alignment;
-            offset += padding;
-            dest.d_quantized_quality_scores = reinterpret_cast<uint8_t*>(base + offset);
-            sz = src.quantized_quality_scores_size * sizeof(src.h_quantized_quality_scores[0]);
-            transfer_queue.memcpy(dest.d_quantized_quality_scores, src.h_quantized_quality_scores, sz);
-            offset += sz;
+            // Quantized quality scores (optional)
+            if (src.quantized_quality_scores_size > 0) {
+                dest.d_quantized_quality_scores =
+                    alloc_and_copy<uint8_t>(transfer_queue, base, offset,
+                                            src.h_quantized_quality_scores,
+                                            src.quantized_quality_scores_size);
+            } else {
+                dest.d_quantized_quality_scores =
+                    alloc_simple<uint8_t>(base, offset, /*count=*/0);
+            }
 
-            transfer_queue.wait();
+            transfer_queue.wait_and_throw();
 
-            dest.d_table_acc = src.h_table_acc;
-            dest.combined_bqsr_table_size = src.combined_bqsr_table_size;
+            dest.d_table_acc                   = src.h_table_acc;
+            dest.combined_bqsr_table_size      = src.combined_bqsr_table_size;
             dest.quantized_quality_scores_size = src.quantized_quality_scores_size;
-            dest.static_quantized_scores_size = src.static_quantized_quality_scores_size;
+            dest.static_quantized_scores_size  = src.static_quantized_quality_scores_size;
 
             dest.offset_of_constant_allocation = offset;
-            dest.is_first_copy = false;
+            dest.is_first_copy                 = false;
         }
 
+        // ------------------------------------------------------------------
+        // Per-batch region (changes every call)
+        // ------------------------------------------------------------------
         offset = dest.offset_of_constant_allocation;
+
         if (n_elements > 0) {
-            size_t chunk_sz = 0;
+            // Figure the contiguous span in the flat buffers
+            const size_t first_start = src.h_sequences_ptr[src_offset].start;
+            const size_t last_end    =
+                src.h_sequences_ptr[src_offset + n_elements - 1].start +
+                src.h_sequences_ptr[src_offset + n_elements - 1].len;
+            const size_t chunk_sz    = last_end - first_start;
 
-            // 1. d_sequences
-            {
-                dest.d_sequences = reinterpret_cast<char *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                                   src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                                  (src.h_sequences_ptr[src_offset].start);
-                size_t chunk_offset = src.h_sequences_ptr[src_offset].start;
-                size_t sequences_data_size = sizeof(src.h_sequences[0]) * chunk_sz;
-                transfer_queue.memcpy(dest.d_sequences, src.h_sequences + chunk_offset, sequences_data_size).wait();
-                offset += sequences_data_size;
-                dest.sequence_span_offset = chunk_offset;
-            }
+            // 1) sequences (bytes)
+            dest.d_sequences = alloc_simple<char>(base, offset, chunk_sz);
+            transfer_queue.memcpy(dest.d_sequences,
+                                  src.h_sequences + first_start,
+                                  sizeof(char) * chunk_sz);
 
-            dest.chunk_sz = chunk_sz;
-            dest.chunk_offset = global_chunk_offset;
-            global_chunk_offset += chunk_sz;
-            // 2. Allocate d_sequences_ptr (an array of SpanField)
-            //    Align the pointer properly.
-            {
-                size_t alignment = alignof(decltype(dest.d_sequences_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_sequences_ptr = reinterpret_cast<SpanField *>(base + offset);
-                size_t sequences_ptr_size = sizeof(dest.d_sequences_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_sequences_ptr, src.h_sequences_ptr + src_offset,
-                                      sequences_ptr_size);
-                offset += sequences_ptr_size;
-            }
+            dest.sequence_span_offset = first_start;
+            dest.chunk_sz             = chunk_sz;
+            dest.chunk_offset         = global_chunk_offset;
+            global_chunk_offset      += chunk_sz;
 
-            // 5. Allocate d_qualities (an array of char)
-            {
-                size_t alignment = alignof(decltype(dest.d_qualities[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_qualities = reinterpret_cast<char *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           (src.h_sequences_ptr[src_offset].start);
-                size_t chunk_offset = src.h_sequences_ptr[src_offset].start;
-                size_t qualities_data_size = sizeof(src.h_qualities[0]) * chunk_sz;
-                transfer_queue.memcpy(dest.d_qualities, src.h_qualities + chunk_offset, qualities_data_size);
-                offset += qualities_data_size;
-            }
+            // 2) sequences_ptr (SpanField[n_elements])
+            dest.d_sequences_ptr =
+                alloc_and_copy<SpanField>(transfer_queue, base, offset,
+                                          src.h_sequences_ptr + src_offset, n_elements);
 
-            // 10. Allocate d_flag (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_flag[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_flag = reinterpret_cast<uint16_t *>(base + offset);
-                size_t flag_data_size = sizeof(dest.d_flag[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_flag, src.h_flags + src_offset, flag_data_size);
-                offset += flag_data_size;
-            }
-            // 11. Allocate d_reads_group_covariate (an array of int8_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_reads_group_covariate[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_reads_group_covariate = reinterpret_cast<int32_t *>(base + offset);
-                size_t reads_group_covariate_data_size = sizeof(dest.d_reads_group_covariate[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_reads_group_covariate, src.h_read_group + src_offset,
-                                      reads_group_covariate_data_size);
-                offset += reads_group_covariate_data_size;
-            }
+            // 3) qualities (bytes)
+            dest.d_qualities = alloc_simple<char>(base, offset, chunk_sz);
+            transfer_queue.memcpy(dest.d_qualities,
+                                  src.h_qualities + first_start,
+                                  sizeof(char) * chunk_sz);
 
-            // 16. Allocate d_stranded_seq (an array of char)
-            {
-                size_t alignment = alignof(decltype(dest.d_stranded_seq[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_stranded_seq = reinterpret_cast<char *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t stranded_seq_size = sizeof(dest.d_stranded_seq[0]) * chunk_sz;
-                size_t chunk_offset = src.h_sequences_ptr[src_offset].start;
-                transfer_queue.memcpy(dest.d_stranded_seq, src.h_sequences + chunk_offset, stranded_seq_size);
-                offset += stranded_seq_size;
-            }
+            // 4) flags (uint16_t[n_elements])  NOTE: type must match kernel and host
+            dest.d_flag =
+                alloc_and_copy<uint16_t>(transfer_queue, base, offset,
+                                         src.h_flags + src_offset, n_elements);
 
-            // 17. Allocate d_stranded_seq_ptr (an array of SpanField)
-            {
-                size_t alignment = alignof(decltype(dest.d_stranded_seq_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_stranded_seq_ptr = reinterpret_cast<SpanField*>(base + offset);
-                size_t stranded_seq_ptr_size = sizeof(dest.d_stranded_seq_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_stranded_seq_ptr, src.h_sequences_ptr + src_offset,
-                                      stranded_seq_ptr_size);
-                offset += stranded_seq_ptr_size;
-            }
+            // 5) read-group covariate (int32_t[n_elements])
+            dest.d_reads_group_covariate =
+                alloc_and_copy<int32_t>(transfer_queue, base, offset,
+                                        src.h_read_group + src_offset, n_elements);
 
-            // 18. Allocate d_base_context (an array of int32_t)
-            {
-                size_t alignment = alignof(decltype(dest.d_base_context[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_base_context = reinterpret_cast<int32_t *>(base + offset);
-                chunk_sz = (src.h_sequences_ptr[src_offset + n_elements - 1].start +
-                            src.h_sequences_ptr[src_offset + n_elements - 1].len) -
-                           src.h_sequences_ptr[src_offset].start;
-                size_t base_context_size = sizeof(dest.d_base_context[0]) * chunk_sz;
-                offset += base_context_size;
-            }
+            // 6) stranded_seq (bytes) — currently copied from h_sequences
+            dest.d_stranded_seq = alloc_simple<char>(base, offset, chunk_sz);
+            transfer_queue.memcpy(dest.d_stranded_seq,
+                                  src.h_sequences + first_start,
+                                  sizeof(char) * chunk_sz);
 
-            // 19. Allocate d_base_context_ptr (an array of SpanField)
-            {
-                size_t alignment = alignof(decltype(dest.d_base_context_ptr[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_base_context_ptr = reinterpret_cast<SpanField *>(base + offset);
-                size_t base_context_ptr_size = sizeof(dest.d_base_context_ptr[0]) * n_elements;
-                transfer_queue.memcpy(dest.d_base_context_ptr, src.h_sequences_ptr + src_offset, base_context_ptr_size);
-                offset += base_context_ptr_size;
-            }
-            // 28. Allocate d_temporary_segments_offsets, capped at 2 BILLIONS
-            {
-                size_t alignment = alignof(decltype(dest.d_temporary_segments_sequences_offsets[0]));
-                size_t padding = (alignment - (offset % alignment)) % alignment;
-                offset += padding;
-                dest.d_temporary_segments_sequences_offsets = reinterpret_cast<int32_t*>(base + offset);
-                chunk_sz = n_elements;
-                size_t segments_size = sizeof(dest.d_temporary_segments_sequences_offsets[0]) * chunk_sz;
-                offset += segments_size;
-            }
+            // 7) stranded_seq_ptr (SpanField[n_elements])
+            dest.d_stranded_seq_ptr =
+                alloc_and_copy<SpanField>(transfer_queue, base, offset,
+                                          src.h_sequences_ptr + src_offset, n_elements);
+
+            // 8) base_context (int32_t[chunk_sz]) — reserved; kernel fills later
+            dest.d_base_context =
+                alloc_simple<int32_t>(base, offset, chunk_sz);
+
+            // 9) base_context_ptr (SpanField[n_elements])
+            dest.d_base_context_ptr =
+                alloc_and_copy<SpanField>(transfer_queue, base, offset,
+                                          src.h_sequences_ptr + src_offset, n_elements);
+
+            // 10) temporary segments offsets (int32_t[n_elements])
+            dest.d_temporary_segments_sequences_offsets =
+                alloc_simple<int32_t>(base, offset, n_elements);
         }
-        if (offset >= dest.max_memory) {
-            exit(-1);
+
+        if (offset > dest.max_memory) {
+            // hard guard
+            std::abort();
         }
-        dest.max_num_elements = apply_bqsr::update_batch_num_elements(src, dest, src_offset + n_elements);
+
         transfer_queue.wait_and_throw();
-    } catch (sycl::exception& e) {
+    }
+    catch (sycl::exception& e) {
         std::cout << "Error during memory copy from host to device: " << e.what() << std::endl;
     }
     Logger::getLogger().log(LOG_DEBUG, "    [Load batch] Time: "+
@@ -332,187 +274,114 @@ void AppyBqsrKernelData::memcpy_dev_to_host(sycl::queue &transfer_queue, ApplyBq
     Timer t;
     t.reset();
 
-    transfer_queue.memcpy(dest.h_qual + src.chunk_offset, src.d_qualities, sizeof(dest.h_qual[0]) * src.chunk_sz);
+    transfer_queue.memcpy(dest.h_qual + dest_offset, src.d_qualities, sizeof(dest.h_qual[0]) * n_elements);
     transfer_queue.wait();
     Logger::getLogger().log(LOG_DEBUG, "    [Moving out flags] Time: " + std::to_string(t.elapsed()) + " sec");
 }
 
 
 
-size_t apply_bqsr::update_batch_num_elements(const ApplyBqsrSequencesInput &in, const AppyBqsrKernelData &kernel_data,
+size_t apply_bqsr::update_batch_num_elements(const ApplyBqsrSequencesInput &in, const AppyBqsrKernelData &kd,
                                  size_t start_idx) {
-    size_t n_elements = 1;
-    size_t idx = start_idx + n_elements;
-    //size_t base = 0;
+    if (start_idx >= in._n) return 0;
 
-    if (idx > in._n) {
-        return 0;
-    }
-    size_t offset = compute_chunk_sz(in, kernel_data, start_idx, n_elements);
+    const size_t Nmax = in._n - start_idx;
 
-    while (offset < kernel_data.max_memory && idx < in._n) {
-        n_elements = std::min(n_elements * 2, in._n-start_idx);
-        offset = compute_chunk_sz(in, kernel_data, start_idx, n_elements);
-        idx = start_idx + n_elements;
+    // 1) Probe: can 1 element fit at all?
+    size_t usage = compute_chunk_sz(in, kd, start_idx, 1);
+    if (usage > kd.max_memory) {
+        return 0;  // caller MUST handle n==0 (no indexing with n-1!)
     }
 
-    // At this point, n_elements is an upper bound that may exceed memory.
-    // Set up binary search between [low, high], where:
-    //   low = n_elements/2 (last count that fit) and high = n_elements.
-    size_t low = n_elements / 2;
-    size_t high = n_elements;
-    size_t best = low;  // best so far that fits.
-    size_t usage = 0;
-
-    while (low <= high) {
-        size_t mid = low + (high - low) / 2;
-        if (start_idx + mid > in._n) {  // avoid going out of bounds
-            if (mid==0) continue;
-            high = mid - 1;
-            continue;
-        }
-        usage = compute_chunk_sz(in, kernel_data, start_idx, mid);
-        if (usage < kernel_data.max_memory) {
-            best = mid;    // mid fits within the memory
-            low = mid + 1; // try for more elements
+    // 2) Exponential search for an upper bound that DOESN'T fit
+    size_t best = 1;   // last known good (fits)
+    size_t high = 1;
+    while (true) {
+        size_t next = std::min(high * 2, Nmax);
+        usage = compute_chunk_sz(in, kd, start_idx, next);
+        if (usage <= kd.max_memory) {
+            best = next;
+            if (next == Nmax) { high = next; break; } // exhausted
+            high = next;
         } else {
-            if (mid==0) continue;
-            high = mid - 1;
+            // first non-fitting count is our upper bound
+            high = next;
+            break;
         }
     }
-    usage = compute_chunk_sz(in, kernel_data, start_idx, best);
-    n_elements = best;
-    return n_elements;
+
+    // 3) Binary search in [best, high] for the max that fits.
+    // Invariant: best fits; high may or may not fit.
+    size_t low = best;
+    while (low < high) {
+        size_t mid = low + (high - low + 1) / 2; // upper mid to avoid infinite loop
+        usage = compute_chunk_sz(in, kd, start_idx, mid);
+        if (usage <= kd.max_memory) {
+            low = mid;   // mid fits → move up
+        } else {
+            high = mid - 1; // mid doesn't fit → move down
+        }
+    }
+    return low;  // >= 1 here
 }
 
 //[[clang::optnone]]
-size_t compute_chunk_sz(const ApplyBqsrSequencesInput& in, const AppyBqsrKernelData& kernel_data, size_t start_idx, size_t n_elements) {
-
+size_t compute_chunk_sz(const ApplyBqsrSequencesInput& in,
+                        const AppyBqsrKernelData&     kd,
+                        size_t start_idx,
+                        size_t n_elements)
+{
     size_t offset = 0;
 
-    /*
-     * Constant size
-     */
-    size_t table_sz = in.sz_qual_score_cov * sizeof(in.h_quality_table[0]);
-    offset += table_sz;
+    // -----------------------------
+    // Constant region (copied once)
+    // -----------------------------
+    simulate_alloc<bqsrEntry>(offset, in.sz_qual_score_cov);                 // quality table
+    simulate_alloc<bqsrEntry>(offset, in.sz_cycle_cov);                      // cycle table
+    simulate_alloc<bqsrEntry>(offset, in.sz_context_cov);                    // context table
+    simulate_alloc<combinedBqsrEntry>(offset, in.combined_bqsr_table_size);  // combined table
+    simulate_alloc<uint8_t>(offset, in.static_quantized_quality_scores_size);// static quant map (may be 0)
+    simulate_alloc<uint8_t>(offset, in.quantized_quality_scores_size);       // dynamic quant map (may be 0)
 
-    size_t alignment = alignof(decltype(in.h_cycle_table[0]));
-    size_t padding = (alignment - (offset % alignment)) % alignment;
-    offset += padding;
-    table_sz = in.sz_cycle_cov * sizeof(in.h_cycle_table[0]);
-    offset += table_sz;
+    // -----------------------------
+    // Variable region (per-batch)
+    // -----------------------------
+    // Flat span size across the selected reads
+    const size_t first_start = in.h_sequences_ptr[start_idx].start;
+    const size_t last_end    =
+        in.h_sequences_ptr[start_idx + n_elements - 1].start +
+        in.h_sequences_ptr[start_idx + n_elements - 1].len;
+    const size_t chunk_sz = last_end - first_start;
 
-    alignment = alignof(decltype(in.h_context_table[0]));
-    padding = (alignment - (offset % alignment)) % alignment;
-    offset += padding;
-    table_sz = in.sz_context_cov * sizeof(in.h_context_table);
-    offset += table_sz;
+    // Sequences bytes
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_sequences)>>(offset, chunk_sz); // char
 
-    alignment = alignof(decltype(in.h_combined_bqsr_table[0]));
-    padding = (alignment - (offset % alignment)) % alignment;
-    offset += padding;
-    table_sz = in.combined_bqsr_table_size * sizeof(in.h_combined_bqsr_table[0]);
-    offset += table_sz;
+    // Sequence pointers (SpanField per element)
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_sequences_ptr)>>(offset, n_elements); // SpanField
 
-    alignment = alignof(decltype(in.h_static_quantized_quality_scores[0]));
-    padding = (alignment - (offset % alignment)) % alignment;
-    offset += padding;
-    table_sz = in.static_quantized_quality_scores_size * sizeof(in.h_static_quantized_quality_scores[0]);
-    offset += table_sz;
+    // Qualities bytes
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_qualities)>>(offset, chunk_sz); // char
 
-    alignment = alignof(decltype(in.h_quantized_quality_scores[0]));
-    padding = (alignment - (offset % alignment)) % alignment;
-    offset += padding;
-    table_sz = in.quantized_quality_scores_size * sizeof(in.h_quantized_quality_scores[0]);
-    offset += table_sz;
+    // Flags
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_flag)>>(offset, n_elements); // uint16_t
 
+    // Read-group covariate  (appeared twice in your original — keep only once)
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_reads_group_covariate)>>(offset, n_elements); // int32_t
 
-    /*
-     * Variable sizes
-     *
-     */
-    size_t chunk_sz = (in.h_sequences_ptr[start_idx + n_elements - 1].start +
-                       in.h_sequences_ptr[start_idx + n_elements - 1].len) -
-                      (in.h_sequences_ptr[start_idx].start);
-    {
-        alignment = alignof(decltype(kernel_data.d_sequences[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t sequences_data_size = sizeof(kernel_data.d_sequences[0]) * chunk_sz;
-        offset += sequences_data_size;
-    }
+    // Stranded seq bytes
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_stranded_seq)>>(offset, chunk_sz); // char
 
-    {
-        alignment = alignof(decltype(kernel_data.d_sequences_ptr[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t sequences_ptr_size = sizeof(kernel_data.d_sequences_ptr[0]) * n_elements;
-        offset += sequences_ptr_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_qualities[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t qualities_data_size = sizeof(kernel_data.d_qualities[0]) * chunk_sz;
-        offset += qualities_data_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_flag[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t flag_data_size = sizeof(kernel_data.d_flag[0]) * n_elements;
-        offset += flag_data_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_reads_group_covariate[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t reads_group_covariate_data_size = sizeof(kernel_data.d_reads_group_covariate[0]) * n_elements;
-        offset += reads_group_covariate_data_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_reads_group_covariate[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t reads_group_covariate_data_size = sizeof(kernel_data.d_reads_group_covariate[0]) * n_elements;
-        offset += reads_group_covariate_data_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_stranded_seq[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t stranded_seq_size = sizeof(kernel_data.d_stranded_seq[0]) * chunk_sz;
-        offset += stranded_seq_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_stranded_seq_ptr[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t stranded_seq_ptr_size = sizeof(kernel_data.d_stranded_seq_ptr[0]) * n_elements;
-        offset += stranded_seq_ptr_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_base_context[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t base_context_size = sizeof(kernel_data.d_base_context[0]) * chunk_sz;
-        offset += base_context_size;
-    }
-    {
-        alignment = alignof(decltype(kernel_data.d_base_context_ptr[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        size_t base_context_ptr_size = sizeof(kernel_data.d_base_context_ptr[0]) * n_elements;
-        offset += base_context_ptr_size;
-    }
-    // 28. Allocate d_temporary_segments_offsets, capped at 2 BILLIONS
-    {
-        alignment = alignof(decltype(kernel_data.d_temporary_segments_sequences_offsets[0]));
-        padding = (alignment - (offset % alignment)) % alignment;
-        offset += padding;
-        chunk_sz = n_elements;
-        size_t segments_size = sizeof(kernel_data.d_temporary_segments_sequences_offsets[0]) * chunk_sz;
-        offset += segments_size;
-    }
+    // Stranded seq ptrs
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_stranded_seq_ptr)>>(offset, n_elements); // SpanField
+
+    // Base context (kernel writes later)
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_base_context)>>(offset, chunk_sz); // int32_t
+
+    // Base context ptrs
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_base_context_ptr)>>(offset, n_elements); // SpanField
+
+    // Temporary per-element offsets
+    simulate_alloc<std::remove_pointer_t<decltype(kd.d_temporary_segments_sequences_offsets)>>(offset, n_elements); // int32_t
+
     return offset;
 }

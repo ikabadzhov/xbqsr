@@ -303,34 +303,7 @@ void BaseRecalibrator::close() {
     this->knownIntervals.clear();
 }
 
-std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
 
-    std::string rg = hdr.getReadGroupRecord().getString(reads.TAGS.RG[idx]);
-    if(!rg.empty()){
-
-        for( auto& record : hdr.getReadGroupRecord().getAll() ){
-            std::string id = record.getReadGroupId();
-
-            if(!id.empty()) {
-                id = record.getReadGroupId();
-                if (rg == id) {
-                    bool ok = record.getAllAttributes().containsKey("PU");
-                    std::string unit;
-                    if(ok) {
-                        unit = record.getAttribute("PU");
-                        return unit;
-                    }
-                    break;
-                }
-            }
-        }
-        return rg;
-    } else {
-        std::cout<<"Error: bqsr requires input with read groups. Alignment at pos " << idx <<" has no read group."/*Please fix input, e.g. rerun with the --replace-read-group option.*/<<std::endl;
-        exit(-1);
-        std::cout<<"unreachable code" << std::endl;
-    }
-}
 
 // Recalibrate implements the first step of base recalibration.
 //[[clang::optnone]]

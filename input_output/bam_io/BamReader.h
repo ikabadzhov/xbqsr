@@ -7,9 +7,7 @@
 #include "../streams/CompressedInputStream.h"
 #include "../streams/BufferReader.h"
 #include "../utils/Constant.h"
-
-
-class InputBatchBam;
+#include "../parser/IOBatch.h"
 
 class BamReader : public AlignmentReader {
 

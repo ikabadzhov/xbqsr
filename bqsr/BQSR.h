@@ -67,7 +67,7 @@ struct applyBuffers {
     size_t szContext;
     size_t MAX_CYCLE;
 
-    applyBuffers(size_t sizeReadGroup, size_t sizeQuality, size_t maxCycle, size_t sizeContext) : szQual(sizeQuality), szCycle(maxCycle*2), szContext(sizeContext+1), nReadGroups(sizeReadGroup), MAX_CYCLE(maxCycle) {
+    applyBuffers(size_t sizeReadGroup, size_t sizeQuality, size_t maxCycle, size_t sizeContext) : nReadGroups(sizeReadGroup), szQual(sizeQuality), szCycle(maxCycle*2), szContext(sizeContext+1), MAX_CYCLE(maxCycle) {
         recalibratedQualityScores.resize(nReadGroups * szQual * szCycle * szContext, -1);
     }
 

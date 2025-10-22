@@ -38,119 +38,12 @@ size_t get_duration(std::chrono::system_clock::time_point start, std::chrono::sy
 
 //[[clang::optnone]]
 int main(int argc, char **argv) {
-    bool help{};
-    namespace po = boost::program_options;
-    po::options_description description("GenomicPipeline [options]" );
-    init_options(description, help);
-
-    po::command_line_parser parser{ argc, argv };
-    parser.options( description );
-    auto parsed_result = parser.run();
-    po::variables_map vm;
-    po::store( parsed_result, vm );
-    po::notify( vm );
-
-    if (help) {
-        std::cerr << description << std::endl;
-        return 0;
-    }
-    //bool filter_unmapped_reads = false;
-    //bool filter_unmapped_reads_strict = false;
-    //bool filter_mapping_quality = false;
-    //bool filter_non_exact_mapping_reads = false;
-    //bool filter_non_overlapping_reads = false;
-    //bool replace_read_group = false;
-    //bool mark_duplicates = false;
-    //bool mark_optical_duplicates = false;
-    //bool optical_duplicates_pixel_distance = false;
-    //bool remove_optional_fields = false;
-    //bool keep_optional_fields = false;
-    bool sorting = false;
-
-    bool bqsr = false;
-    bool applyBqsr = false;
-
-    string input_filename;
-    basic_string<char> output_filename;
-    string metric_filename;
-    string reference_filename;
-    string recal_filename;
-    string bed_filename;
+    // Parse all command-line arguments
+    Arguments args = parse_arguments(argc, argv);
 
     /* Input parsing variable section */
     std::vector<SamAlignments> alignments;
 
-    std::vector<std::string> knownSites;
-
-    string echo_command="gal ";
-
-    //SortingOrder sorting_order = SortingOrder::Keep;
-
-    if( vm.count("input") ){
-        input_filename  = vm["input"].as<string>();
-        echo_command+=("--input " + input_filename + " ");
-    } else{
-        std::cerr << "Input file not specified" << std::endl;
-        std::cerr << description << std::endl;
-        exit(-1);
-    }
-
-    if( vm.count("output") ){
-        output_filename  = vm["output"].as<string>();
-        echo_command+=("--output " + output_filename + " ");
-    } else{
-        std::cerr << "Output file not specified" << std::endl;
-        std::cerr << description << std::endl;
-        exit(-1);
-    }
-
-    if( vm.count("bqsr") ){
-        if ( vm.count("reference") ) {
-            recal_filename = vm["bqsr"].as<string>();
-            echo_command += ("--bqsr " + recal_filename + " ");
-            reference_filename = vm["reference"].as<string>();
-            echo_command += ("--reference " + reference_filename + " ");
-            bqsr = true;
-        } else {
-            std::cerr << "Reference file not specified for bqsr step." << std::endl;
-            std::cerr << description << std::endl;
-            exit(-1);
-        }
-    }
-
-    if( vm.count("applyBqsr") ){
-        if ( vm.count("reference") ) {
-            recal_filename = vm["applyBqsr"].as<string>();
-            echo_command += ("--bqsr " + recal_filename + " ");
-            reference_filename = vm["reference"].as<string>();
-            echo_command += ("--reference " + reference_filename + " ");
-            applyBqsr = true;
-        } else {
-            std::cerr << "Reference file not specified for applyBqsr step." << std::endl;
-            std::cerr << description << std::endl;
-            exit(-1);
-        }
-    }
-
-    if (vm.count("known-sites")) {
-        std::string sites = vm["known-sites"].as<std::string>();
-        echo_command += ("--known-sites ");
-        std::string delimiter = ",";
-        size_t pos = 0;
-        std::string token;
-        while ((pos = sites.find(delimiter)) != std::string::npos) {
-            token = sites.substr(0, pos);
-            knownSites.emplace_back(token);
-            echo_command += (token + ",");
-            sites.erase(0, pos + delimiter.length());
-        }
-        if (!sites.empty()) {
-            echo_command += (sites);
-            knownSites.emplace_back(sites);
-        } else {
-            echo_command[echo_command.size()-1] = ' ';
-        }
-    }
     // Enumerate all GPU devices available
     auto platforms = sycl::platform::get_platforms();
 
@@ -189,11 +82,9 @@ int main(int argc, char **argv) {
     /**** Input parsing for reading Alignment Data *****/
 
     Logger::getLogger().set_min_severity(LOG_DEBUG);
-    Logger::getLogger().log(LOG_INFO, "Running: " + echo_command);
-
 
     std::shared_ptr<Header> header;
-    std::unique_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(input_filename);
+    std::unique_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(args.input_bam);
     header = std::make_shared<Header>();
     alignmentReader->ParseHeader(*header);
 
@@ -212,7 +103,7 @@ int main(int argc, char **argv) {
 
     BQSRTableConfig bqsrTableConfig(header->getReadGroupRecord().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
 
-    if (bqsr) {
+    if (args.is_recalibrate()) {
         std::unique_ptr<BaseRecalibrator> baseRecal;
 
         std::thread loader_fasta([&]() {
@@ -220,8 +111,8 @@ int main(int argc, char **argv) {
             t_in_ref.reset();
             baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
             MappedFasta referenceGenome;
-            referenceGenome.Open(reference_filename);
-            baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, knownSites, device, *header, *baseRecalibratorTables);
+            referenceGenome.Open(args.reference);
+            baseRecal = std::make_unique<BaseRecalibrator>(referenceGenome, args.known_sites, device, *header, *baseRecalibratorTables);
             Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t_in_ref.elapsed()) + " sec");
         });
         loader_fasta.join();
@@ -235,7 +126,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        print_stage_header("BQSR I - Recalibrate");
+        print_stage_header("BQSR - Recalibrate");
 
         Timer t_recal;
         t_recal.reset();
@@ -248,22 +139,22 @@ int main(int argc, char **argv) {
 
         Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t_recal.elapsed()) + " sec");
 
-        baseRecalibratorTables->PrintBQSRTables(recal_filename, alignments[0].TAGS.RG, *header);
+        baseRecalibratorTables->PrintBQSRTables(args.recal_table, alignments[0].TAGS.RG, *header);
     }
 
-    if (applyBqsr) {
+    if (args.is_apply()) {
         Timer t_apply;
         t_apply.reset();
 
         baseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
-        baseRecalibratorTables->LoadFromReport(recal_filename, *header);
+        baseRecalibratorTables->LoadFromReport(args.recal_table, *header);
 
         Logger::getLogger().log(LOG_INFO, "Time to load BQSR table from file: " + std::to_string(t_apply.elapsed()) + " sec");
 
         loader_sam.join();
 
         t_apply.reset();
-        print_stage_header("BQSR II - Apply Recalibration");
+        print_stage_header("BQSR - Apply");
 
         for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
             auto addREFID = Filter::AddREFID(alignments[batchIdx]);
@@ -285,7 +176,7 @@ int main(int argc, char **argv) {
         t_out.reset();
         print_stage_header("Writing SAM File");
 
-        std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(output_filename);
+        std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(args.output_bam);
 
         wf->FormatHeader(*header);
         wf->FormatAlignment(alignments);

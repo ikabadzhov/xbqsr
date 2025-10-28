@@ -5,7 +5,7 @@
 #include <iomanip>
 #include <string_view>
 
-#define ALLOW_TIME_PROFILER
+//#define ALLOW_TIME_PROFILER
 
 enum class StageId : size_t {
     AddReadGroup = 0,

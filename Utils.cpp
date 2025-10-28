@@ -31,7 +31,8 @@ void init_options( po::options_description &description, bool &help ){
             "recal-out", po::value<string>(), "Recalibration table file" )(
             "recal", po::value<string>(), "Recalibration table file" )(
             "ref", po::value<string>(), "Reference FASTA file (recalibrate command only)" )(
-            "known-sites", po::value<string>(), "Comma-delimited list of known variant sites (recalibrate command only)"
+            "known-sites", po::value<string>(), "Comma-delimited list of known variant sites (recalibrate command only)" )(
+            "gpus", po::value<string>(), "Number of GPUs to use (default: 1, or 'all' to use all available GPUs)"
     );
 
 }
@@ -270,6 +271,26 @@ Arguments parse_arguments(int argc, char** argv) {
             std::cerr << "Required options:\n";
             print_apply_parameter();
             exit(-1);
+        }
+    }
+
+    // Parse optional --gpus parameter
+    if (vm.count("gpus")) {
+        std::string gpus_str = vm["gpus"].as<string>();
+        if (gpus_str == "all") {
+            args.gpus = -1;  // -1 means use all available GPUs
+        } else {
+            try {
+                args.gpus = std::stoi(gpus_str);
+                if (args.gpus < 1) {
+                    std::cerr << "Error: Number of GPUs must be at least 1 or 'all' (--gpus)\n" << std::endl;
+                    exit(-1);
+                }
+            } catch (const std::invalid_argument& e) {
+                std::cerr << "Error: Invalid GPU parameter value '" << gpus_str
+                          << "'. Must be a positive integer or 'all' (--gpus)\n" << std::endl;
+                exit(-1);
+            }
         }
     }
 

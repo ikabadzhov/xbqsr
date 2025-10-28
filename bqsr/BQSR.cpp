@@ -300,7 +300,6 @@ void calculateSkipSlice(char* seq, SpanField& sequencePtrs, char* qual, SpanFiel
 
 
 void BaseRecalibrator::close() {
-    this->knownIntervals.clear();
 }
 
 
@@ -309,7 +308,7 @@ void BaseRecalibrator::close() {
 //[[clang::optnone]]
 void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
     Timer timerAll;
-    if (reads.GetAlnsNum()==0) return;
+    if (reads.GetAlnsNum() == 0) return;
     auto& profiler = ProfilerBQSR::instance();
     timerAll.reset();
     Timer t;
@@ -395,82 +394,36 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
     profiler.report();
 }
 
-BaseRecalibrator::BaseRecalibrator(MappedFasta &fastaMap, std::vector<std::string> &knownSites,
-                                   sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), fastaMap(fastaMap), q(device) {
+BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& knownSites,
+                                   sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), q(device) {
     Timer t;
     t.reset();
-    for (std::string& knownSitesFile : knownSites){
-        std::unordered_map<std::string, std::vector<Interval>> knownSitesIntervals;
-        Interval::ImportIntervals(knownSitesFile, knownSitesIntervals);
-        for (auto& p : knownSitesIntervals) {
-            auto chrom = p.first;
-            auto ivals = p.second;
-            auto s1 = knownIntervals[chrom].size();
-            auto s2 = ivals.size();
-            knownIntervals[chrom].reserve(s1+s2);
-            std::move(ivals.begin(), ivals.end(), std::back_inserter(knownIntervals[chrom]));
-        }
-    }
-    for (auto& [chrom, ivals] : knownIntervals) {
-        Interval::ParallelSortByStart(ivals);
-        knownIntervals[chrom] = Interval::ParallelFlatten(ivals);
-    }
 
-    size_t sz_local_intervals_ptr = hdr.getSequenceDictionary().getAll().size();
+    this->fasta = mem_t<uint8_t>(referenceGenome.getFullFasta().size(), q, memory_space_t::memory_space_shared);
+    this->fasta_ptrs = mem_t<SpanFieldLong>(referenceGenome.getFullFastaPtrs().size(), q, memory_space_t::memory_space_shared);
 
-    local_known_intervals_ptrs = mem_t<SpanFieldLong>(sz_local_intervals_ptr, q, memory_space_shared);
+    this->local_known_intervals = mem_t<Interval>(knownSites.getIntervals().size(), q, memory_space_t::memory_space_shared);
+    this->local_known_intervals_ptrs = mem_t<SpanFieldLong>(knownSites.getIntervalsPtrs().size(), q, memory_space_t::memory_space_shared);
 
-    size_t totSz = 0;
-    for (const auto& chrIntervals : this->knownIntervals) {
-        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
-            totSz += chrIntervals.second.size();
-            local_known_intervals_ptrs.data()[chrIdx] = SpanFieldLong(0, chrIntervals.second.size());
-        }
-    }
+    // Copy FASTA bases
+    q.memcpy(this->fasta.data(),
+             referenceGenome.getFullFasta().data(),
+             referenceGenome.getFullFasta().size() * sizeof(uint8_t));
 
-    local_known_intervals = mem_t<Interval>(totSz, q, memory_space_shared);
+    // Copy FASTA pointers
+    q.memcpy(this->fasta_ptrs.data(),
+             referenceGenome.getFullFastaPtrs().data(),
+             referenceGenome.getFullFastaPtrs().size() * sizeof(SpanFieldLong));
 
-    for (size_t idx = 1; idx < local_known_intervals_ptrs.size(); idx++) {
-        local_known_intervals_ptrs.data()[idx].start += local_known_intervals_ptrs.data()[idx-1].start + local_known_intervals_ptrs.data()[idx - 1].len;
-    }
+    // Copy known-site intervals
+    q.memcpy(this->local_known_intervals.data(),
+             knownSites.getIntervals().data(),
+             knownSites.getIntervals().size() * sizeof(Interval));
 
-    for (const auto& chrIntervals : knownIntervals) {
-        if (hdr.getSequenceDictionary().containsSequence(chrIntervals.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(chrIntervals.first);
-            assert(local_known_intervals_ptrs.data()[chrIdx].len == chrIntervals.second.size());
-            for (size_t intervIdx = 0; intervIdx < chrIntervals.second.size(); intervIdx++) {
-                local_known_intervals.data()[local_known_intervals_ptrs.data()[chrIdx].start + intervIdx] = chrIntervals.second[intervIdx];
-            }
-        }
-    }
-
-    fasta_ptrs = mem_t<SpanFieldLong>(hdr.getSequenceDictionary().getAll().size(), q, memory_space_shared);
-
-    totSz = 0;
-    for (auto& references : fastaMap.getFullFasta()) {
-        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
-            totSz += references.second.size();
-            fasta_ptrs.data()[chrIdx] = SpanFieldLong(0, references.second.size());
-        }
-    }
-
-    fasta = mem_t<uint8_t>(totSz, q, memory_space_shared);
-
-    for (size_t idx = 1; idx < fasta_ptrs.size(); idx++) {
-        fasta_ptrs.data()[idx].start += fasta_ptrs.data()[idx-1].start + fasta_ptrs.data()[idx - 1].len;
-    }
-
-    for (auto& references : this->fastaMap.getFullFasta()) {
-        if (hdr.getSequenceDictionary().containsSequence(references.first)) {
-            auto chrIdx = hdr.getSequenceDictionary().getIdx(references.first);
-            assert(fasta_ptrs.data()[chrIdx].len == references.second.size());
-            for (size_t intervIdx = 0; intervIdx < references.second.size(); intervIdx++) {
-                fasta.data()[fasta_ptrs.data()[chrIdx].start + intervIdx] = references.second[intervIdx];
-            }
-        }
-    }
+    // Copy interval pointers
+    q.memcpy(this->local_known_intervals_ptrs.data(),
+             knownSites.getIntervalsPtrs().data(),
+             knownSites.getIntervalsPtrs().size() * sizeof(SpanFieldLong));
 
     Logger::getLogger().log(LOG_INFO, "Time to flatten fasta and intervals: " + std::to_string(t.elapsed()));
     this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.qualityScores().size(), q, memory_space_t::memory_space_shared);
@@ -494,6 +447,50 @@ void BaseRecalibrator::exportTables(BaseRecalibratorTables &recalibration_tables
     memcpy(recalibration_tables.qualityScores().table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.qualityScores().size());
     memcpy(recalibration_tables.cycles().table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.cycles().size());
     memcpy(recalibration_tables.contexts().table.data(), tables_context.data(), sizeof(bqsrEntry)*recalibration_tables.contexts().size());
+}
+
+void BaseRecalibrator::mergeTables(BaseRecalibratorTables &recalibration_tables) {
+    auto merge_one_table = [&](auto &dstTableVec,
+                               auto &srcMem /* mem_t<bqsrEntry>& */)
+    {
+        const size_t n = dstTableVec.size();
+        if (n == 0) return;
+        // Safety: assume srcMem.size() == n. If paranoid, you can assert.
+        // assert(srcMem.size() == n && "BQSR table size mismatch across devices");
+
+        const bqsrEntry* srcHostPtr = nullptr;
+        std::vector<bqsrEntry> staging; // only used if we need to copy from device
+
+        if (srcMem.space() == memory_space_t::memory_space_shared ||
+            srcMem.space() == memory_space_t::memory_space_host) {
+            // Host can directly read srcMem.data()
+            srcHostPtr = srcMem.data();
+            } else {
+                // Device-only: copy to staging buffer on host
+                staging.resize(n);
+                // enqueue memcpy and wait
+                srcMem.context().memcpy(staging.data(),
+                                      srcMem.data(),
+                                      n * sizeof(bqsrEntry)).wait();
+                srcHostPtr = staging.data();
+            }
+
+        // Now merge into dst
+        bqsrEntry* dstPtr = dstTableVec.data();
+        for (size_t i = 0; i < n; ++i) {
+            dstPtr[i].Observations += srcHostPtr[i].Observations;
+            dstPtr[i].Mismatches   += srcHostPtr[i].Mismatches;
+        }
+    };
+
+    // qualityScores()
+    merge_one_table(recalibration_tables.qualityScores().table, tables_quality);
+
+    // cycles()
+    merge_one_table(recalibration_tables.cycles().table, tables_cycle);
+
+    // contexts()
+    merge_one_table(recalibration_tables.contexts().table, tables_context);
 }
 
 

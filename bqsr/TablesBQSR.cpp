@@ -52,12 +52,10 @@ void bqsrTable::update(bqsrEntry* table, size_t idx, int64_t errorVal){
     table[idx].Mismatches += errorVal;
 }
 
-void bqsrTable::merge(bqsrTable& other){
-}
-
-size_t bqsrTable::size() {
+/*size_t bqsrTable::size() {
     return table.size();
-}
+}*/
+
 
 uint8_t  calculateBayesianEstimateOfEmpiricalQuality(int64_t observations, int64_t mismatches, double priorQuality) {
     if (observations > maxNumberOfObservations) {

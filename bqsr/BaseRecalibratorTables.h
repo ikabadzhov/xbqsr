@@ -71,13 +71,15 @@ public:
     [[nodiscard]] inline size_t cyclesCount() const noexcept        { return nReadGroups * nQualScore * nCycleCov; }
     [[nodiscard]] inline size_t contextsCount() const noexcept      { return nReadGroups * nQualScore * nContextCov; }
 
+    void merge(const BaseRecalibratorTables & other);
+
     static constexpr size_t MaxContextCovariateKey(size_t contextLen) noexcept {
         // GATK-style encoding:
         // lowest LENGTH_BITS bits store length; each base adds 2 bits.
         uint32_t length = contextLen;  // the length of the context
         uint32_t key = contextLen;
         uint32_t bitOffset = LENGTH_BITS;
-        for (int i = 0; i <length ; i++) {
+        for (int i = 0; i < length ; i++) {
             key |= (3 << bitOffset);
             bitOffset += 2;
         }

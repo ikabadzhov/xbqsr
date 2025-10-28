@@ -16,6 +16,7 @@ struct Arguments {
     std::string recal_table;        // --recal-out
     std::string reference;          // --ref (for recalibrate)
     std::vector<std::string> known_sites;  // --known-sites
+    int gpus = 1;                   // --gpus (number of GPUs to use, default: 1)
 
     bool is_recalibrate() const { return command == "recalibrate"; }
     bool is_apply() const { return command == "apply"; }

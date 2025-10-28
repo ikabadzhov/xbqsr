@@ -9,7 +9,6 @@
 #include "apply_bqsr/ApplyBqsrKernelData.h"
 
 
-
 BaseRecalibratorTables::BaseRecalibratorTables(const BQSRTableConfig& cfg)
     : nReadGroups(cfg.n_read_groups),
       nQualScore(cfg.n_qual_score),
@@ -18,13 +17,76 @@ BaseRecalibratorTables::BaseRecalibratorTables(const BQSRTableConfig& cfg)
       nCycleCov (cfg.max_cycle * 2),
       nContextCov(MaxContextCovariateKey(cfg.context_len) + 1) {
 
-    bqsrEntry defaultEntry(-1, 0);
+    bqsrEntry defaultEntry(0, 0);
     QualityScores_.table.resize(nReadGroups * nQualScore, defaultEntry);
     QualityScores_.empirical_qualities.resize(nReadGroups * nQualScore, 0);
     Cycles_.table.resize(nReadGroups * nQualScore * nCycleCov, defaultEntry);
     Cycles_.empirical_qualities.resize(nReadGroups * nQualScore * nCycleCov, 0);
     Contexts_.table.resize(nReadGroups * nQualScore * nContextCov, defaultEntry);
     Contexts_.empirical_qualities.resize(nReadGroups * nQualScore * nContextCov, 0);
+}
+
+// assumes you have something like:
+// RecalibrationTable& qualityScores(); // returns an object that has .table (std::vector<bqsrEntry>) or similar
+// const RecalibrationTable& qualityScores() const;
+// same for cycles() and contexts()
+
+void BaseRecalibratorTables::merge(const BaseRecalibratorTables& other) {
+    // 1. sanity: sizes must match
+    const auto qs_size = qualityScores().size();
+    const auto oc_qs_size = other.qualityScores().size();
+    if (qs_size != oc_qs_size) {
+        throw std::runtime_error("merge(): qualityScores size mismatch");
+    }
+
+    const auto cy_size = cycles().size();
+    const auto oc_cy_size = other.cycles().size();
+    if (cy_size != oc_cy_size) {
+        throw std::runtime_error("merge(): cycles size mismatch");
+    }
+
+    const auto cx_size = contexts().size();
+    const auto oc_cx_size = other.contexts().size();
+    if (cx_size != oc_cx_size) {
+        throw std::runtime_error("merge(): contexts size mismatch");
+    }
+
+    // 2. merge qualityScores
+    {
+        auto *dst = qualityScores().table.data();        // mutable bqsrEntry*
+        const auto *src = other.qualityScores().table.data(); // const bqsrEntry*
+        tbb::parallel_for(
+            std::size_t(0), qs_size, [&](std::size_t i) {
+                dst[i].Observations += src[i].Observations;
+                dst[i].Mismatches   += src[i].Mismatches;
+                // if you later track insertions/deletions/etc, add them here too
+            }
+        );
+    }
+
+    // 3. merge cycles
+    {
+        auto *dst = cycles().table.data();
+        const auto *src = other.cycles().table.data();
+        tbb::parallel_for(
+            std::size_t(0), cy_size, [&](std::size_t i) {
+                dst[i].Observations += src[i].Observations;
+                dst[i].Mismatches   += src[i].Mismatches;
+            }
+        );
+    }
+
+    // 4. merge contexts
+    {
+        auto *dst = contexts().table.data();
+        const auto *src = other.contexts().table.data();
+        tbb::parallel_for(
+            std::size_t(0), cx_size, [&](std::size_t i) {
+                dst[i].Observations += src[i].Observations;
+                dst[i].Mismatches   += src[i].Mismatches;
+            }
+        );
+    }
 }
 
 void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, std::vector<combinedBqsrEntry>& table) {

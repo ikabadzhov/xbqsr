@@ -59,7 +59,8 @@ public:
 
     std::vector<bqsrEntry> table;
     std::vector<uint8_t> empirical_qualities;
-    size_t size();
+    //size_t size();
+    [[nodiscard]] size_t size() const noexcept { return table.size(); }
 };
 
 struct combinedBqsrEntry {

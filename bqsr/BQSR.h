@@ -18,8 +18,6 @@
 class BaseRecalibrator {
 public:
     BaseRecalibratorTables& recalibration_tables;
-    MappedFasta& fastaMap;
-    std::unordered_map<std::string, std::vector<Interval>> knownIntervals;
     sycl::queue q;
     mem_t<Interval> local_known_intervals;
     mem_t<SpanFieldLong> local_known_intervals_ptrs;
@@ -30,9 +28,10 @@ public:
     mem_t<bqsrEntry> tables_cycle;
     mem_t<bqsrEntry> tables_context;
 
-    explicit BaseRecalibrator(MappedFasta &fastaMap, std::vector<std::string> &knownSites,
+    explicit BaseRecalibrator(MappedFasta &referenceGenome, KnownSites &knownSites,
                               sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
     void exportTables(BaseRecalibratorTables& recalibration_tables);
+    void mergeTables(BaseRecalibratorTables& recalibration_tables);
     void Recalibrate(sycl::device& device, SamAlignments& reads);
     void close();
 };

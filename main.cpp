@@ -165,14 +165,15 @@ int main(int argc, char **argv) {
         Timer t_apply;
         t_apply.reset();
 
-        globalBaseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
-        globalBaseRecalibratorTables->LoadFromReport(args.recal_table, *header);
+        tbb::parallel_for(0, n_gpus, [&](size_t dev_idx) {
+            localBaseRecalibratorTables[dev_idx] = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
+            localBaseRecalibratorTables[dev_idx]->LoadFromReport(args.recal_table, *header);
+        });
 
         Logger::getLogger().log(LOG_INFO, "Time to load BQSR table from file: " + std::to_string(t_apply.elapsed()) + " sec");
 
         loader_sam.join();
 
-        t_apply.reset();
         print_stage_header("BQSR - Apply");
 
         for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
@@ -182,12 +183,21 @@ int main(int argc, char **argv) {
             }
         }
 
+        t_apply.reset();
+
         int quantize_level = 0;
         std::vector<uint8_t> sqqList;
 
-        for (size_t i = 0; i < alignments.size(); i++) {
-            globalBaseRecalibratorTables->ApplyBQSR(device, alignments[i], quantize_level, sqqList);
-        }
+        size_t workload = (alignments.size() + n_gpus - 1) / n_gpus;
+
+        tbb::parallel_for(0, n_gpus, [&](size_t dev_idx) {
+            for (size_t i = workload * dev_idx; i < workload * dev_idx + workload; i++) {
+                if (i >= alignments.size()) {
+                    return;
+                }
+                localBaseRecalibratorTables[dev_idx]->ApplyBQSR(gpus[dev_idx], alignments[i], quantize_level, sqqList);
+            }
+        });
 
         Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t_apply.elapsed()) + " sec");
 

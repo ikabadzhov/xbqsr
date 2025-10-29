@@ -17,8 +17,7 @@ BQSR operates in two stages:
 
 ### Features
 
-- GPU acceleration using SYCL for parallel processing
-- Multi-dimensional recalibration tables tracking three event types: SNP, insertion, and deletion events
+- Multi-GPU acceleration using SYCL for parallel processing
 - Covariates: read group, base quality score, cycle position, and dinucleotide context
 
 ### Usage

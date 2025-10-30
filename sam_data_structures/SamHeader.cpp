@@ -101,8 +101,22 @@ void Header::addSequenceRecord(SequenceRecord &sequence) {
     this->sequenceDictionary.add(sequence);
 }
 
-void Header::addReadGroupRecord(ReadGroupRecord& readGroup) {
+void Header::addReadGroupRecord(const ReadGroupRecord &readGroup) {
     this->readGroups.add(readGroup);
+}
+
+int32_t Header::covKeyForRGId(int32_t rg_id) const {
+    if (rg_id < 0 || static_cast<size_t>(rg_id) >= rgIdToCovKey_.size()) return -1;
+    return rgIdToCovKey_[static_cast<size_t>(rg_id)];
+}
+
+const std::string & Header::covLabelForKey(int32_t key) const {
+    return rgCov_.getString(static_cast<size_t>(key));
+}
+
+std::string Header::covLabelForRGId(int32_t rg_id) const {
+    const int32_t k = covKeyForRGId(rg_id);
+    return (k < 0) ? std::string{} : rgCov_.getString(static_cast<size_t>(k));
 }
 
 QnameStringMapper &Header::QnameMapper() {
@@ -113,9 +127,9 @@ ProgramGroups& Header::getProgramGroup() {
     return programGroups;
 }
 
-ReadGroupsDictionary &Header::getReadGroupRecord() {
-    return readGroups;
-}
+ReadGroupsDictionary & Header::getReadGroupRecord() noexcept { return readGroups; }
+
+const ReadGroupsDictionary & Header::getReadGroupRecord() const noexcept { return readGroups; }
 
 Comments& Header::getComments() {
     return comments;
@@ -125,10 +139,36 @@ SequenceDictionary &Header::getSequenceDictionary() {
     return sequenceDictionary;
 }
 
+void Header::buildReadGroupCovariateIndex() {
+    std::unique_lock lk(mtx);
+
+    // Rebuild safely (idempotent)
+    rgCov_.clear();
+    rgIdToCovKey_.clear();
+    rgIdToCovKey_.resize(static_cast<size_t>(readGroups.size()), -1);
+
+    const auto& all = readGroups.getAll();
+    for (size_t rg_id = 0; rg_id < all.size(); ++rg_id) {
+        const auto& rg = all[rg_id];
+
+        // Prefer PU; fallback to RG ID
+        std::string ident;
+        if (rg.containsAttribute("PU")) {
+            ident = rg.getAttribute("PU");
+            if (ident.empty()) ident = rg.getReadGroupId();   // guard empty PU
+        } else {
+            ident = rg.getReadGroupId();
+        }
+
+        // Insert (StringDictionary::add should dedupe & return stable key)
+        const int32_t key = rgCov_.add(ident);
+        rgIdToCovKey_[rg_id] = key;
+    }
+}
+
 FileMetadata &Header::getHD() {
     return attributesHD;
 }
-
 
 void FileMetadata::put(const std::string &key, const std::string &value) {
     attributes.put(key, value);

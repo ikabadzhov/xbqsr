@@ -48,7 +48,7 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
     size_t offset_sequences = batch->_d_data.sequence_span_offset;
 
     t.reset();
-    batch->_q_process.parallel_for<class SetOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+    batch->_q_process.parallel_for<class ApplySetOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
         d_sequences_ptr[idx].start -= offset_sequences;
         d_stranded_seq_ptr[idx].start -= offset_sequences;
         d_base_context_ptr[idx].start -= offset_sequences;
@@ -58,9 +58,9 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
     Logger::getLogger().log(LOG_DEBUG, "    [SetOffset kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     t.reset();
-    batch->_q_process.parallel_for<class ComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
-
-        if (!d_combined_bqsr_table[idx].isValid) {
+    batch->_q_process.parallel_for<class ApplyComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+        auto readGrpIndex = d_reads_group_covariate[idx];
+        if (!d_combined_bqsr_table[readGrpIndex].isValid) {
             return;
         }
         if (d_sequences_ptr[idx].len == 0) {
@@ -78,7 +78,7 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
     Logger::getLogger().log(LOG_DEBUG, "    [ComputeBaseContextCovariate kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     t.reset();
-    batch->_q_process.parallel_for<class CopySequencesOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+    batch->_q_process.parallel_for<class ApplyCopySequencesOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
        d_temporary_segments_sequences_offsets[idx] = d_sequences_ptr[idx].start - d_sequences_ptr[0].start; // It can also be:  -d_sequences_ptr->start[0]
     });
 
@@ -103,7 +103,7 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
         batch->_q_process.submit([&](sycl::handler& cgh) {
             sycl::local_accessor<SharedMemory, 1> shared(sycl::range<1>(1), cgh);
 
-            cgh.parallel_for<class ComputeCovariateTableIndexes>(
+            cgh.parallel_for<class ApplyComputeCovariateTableIndexes>(
                 sycl::nd_range<1>(sycl::range<1>(num_ctas * nt),
                 sycl::range<1>(nt)),
                 [=, count=batch->_d_data.chunk_sz, num_reads=(batch->_n), GLOBAL_QUALITY_SCORE_PRIOR = globalQualityScorePrior](sycl::nd_item<1> item) {

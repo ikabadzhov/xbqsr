@@ -5,6 +5,7 @@
 #include <map>
 #include "../data_types/RGStringMapper.h"
 #include "../data_types/QnameStringMapper.h"
+#include "../data_types/StringDictionary.h"
 #include "sam_header_fields/ReadGroupField.h"
 #include "sam_header_fields/SequenceField.h"
 #include "sam_header_fields/ProgramField.h"
@@ -93,25 +94,44 @@ class Header {
     // Save the lines @RG of a sam/bam header file
     ReadGroupsDictionary readGroups;
 
+    // Unified covariate dictionary: strings are PU or RG ID
+    StringDictionary rgCov_;
+
+    // Map from internal rg_id -> covariate key (index in rgCov_)
+    std::vector<int32_t> rgIdToCovKey_;
+
     // Save the lines @PG of a sam/bam header file
     ProgramGroups programGroups;
 
     // The @CO lines in the order they occur in the header.
     Comments comments;
 
+    std::mutex mtx;
 public:
     Header() = default;
 
     void addProgramRecord(ProgramRecord& program);
-    void addReadGroupRecord(ReadGroupRecord& program);
+    void addReadGroupRecord(const ReadGroupRecord &program);
     void addComment(const std::string& line);
     void addSequenceRecord(SequenceRecord& sequence);
 
     FileMetadata& getHD();
     ProgramGroups& getProgramGroup();
-    ReadGroupsDictionary& getReadGroupRecord();
+    ReadGroupsDictionary&       getReadGroupRecord()       noexcept;
+    const ReadGroupsDictionary& getReadGroupRecord() const noexcept;
     Comments& getComments();
     SequenceDictionary& getSequenceDictionary();
+
+    void buildReadGroupCovariateIndex();
+
+    // Fast lookup during ApplyBQSR
+    int32_t covKeyForRGId(int32_t rg_id) const;
+
+    // For report printing
+    const std::string& covLabelForKey(int32_t key) const;
+    std::string covLabelForRGId(int32_t rg_id) const;
+
+    const StringDictionary& getReadGroupCovariates() { return rgCov_; }
 
 private:
     QnameStringMapper qnameMapper;

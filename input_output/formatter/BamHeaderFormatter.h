@@ -4,12 +4,11 @@
 
 #include <string>
 #include "../../sam_data_structures/SamHeader.h"
-#include "../streams/BufferWriter.h"
+
 
 class BamHeaderFormatter {
 public:
     static void FormatBamHeader(Header &hdr, std::string& line);
-    static void FormatBamHeaderFromSlice(Header &hdr, BufferWriter &buffer);
 };
 
 

@@ -306,7 +306,7 @@ void BaseRecalibrator::close() {
 
 // Recalibrate implements the first step of base recalibration.
 //[[clang::optnone]]
-void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
+void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     Timer timerAll;
     if (reads.GetAlnsNum() == 0) return;
     auto& profiler = ProfilerBQSR::instance();
@@ -320,9 +320,9 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
 
     profiler.start(StageId::AddReadGroup);
 
-    reads.TMP.reads_group_covariate_.Resize(maxIdx);
+    reads.TMP.reads_group_covariate_.resize(maxIdx);
     tbb::parallel_for(0, maxIdx, [&](size_t idx) {
-        reads.TMP.reads_group_covariate_.Set(idx, readGroupCovariate(hdr, reads, idx));
+        reads.TMP.reads_group_covariate_[idx] = readGroupCovariateId(hdr, reads, idx);
     });
 
     profiler.stop(StageId::AddReadGroup);
@@ -370,7 +370,7 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
                       reads.RNAME.data(),
                       recalibrate_aln_flag.data(),
                       reads.FLAG.data(),
-                      reads.TMP.reads_group_covariate_.toVec().data(),
+                      reads.TMP.reads_group_covariate_.data(),
                       batch_size);
 
 
@@ -380,65 +380,65 @@ void BaseRecalibrator::Recalibrate(sycl::device& device, SamAlignments& reads) {
     // Set up your configuration using available device memory
     ComputeSkipSliceConfiguration config;
     //size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
-    size_t available_mem = q.get_device().get_info<sycl::info::device::global_mem_size>();
+    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>();
     config.max_memory = available_mem / 3;
 
     // Process the current batch with your kernel
-    batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(device, in, out, compute_skip_slice_kernel, config);
-    q.wait();
+    batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(q_, in, out, compute_skip_slice_kernel, config);
+    q_.wait();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 
     profiler.stop(StageId::RecalibrateBatches);
 
     Logger::getLogger().log(LOG_INFO, "Total time recalibrate: " + std::to_string(timerAll.elapsed()) + "sec");
-    profiler.report();
+    //profiler.report();
 }
 
 BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& knownSites,
-                                   sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), q(device) {
+                                   sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), q_(queue) {
     Timer t;
     t.reset();
 
-    this->fasta = mem_t<uint8_t>(referenceGenome.getFullFasta().size(), q, memory_space_t::memory_space_shared);
-    this->fasta_ptrs = mem_t<SpanFieldLong>(referenceGenome.getFullFastaPtrs().size(), q, memory_space_t::memory_space_shared);
+    this->fasta = mem_t<uint8_t>(referenceGenome.getFullFasta().size(), q_, memory_space_t::memory_space_shared);
+    this->fasta_ptrs = mem_t<SpanFieldLong>(referenceGenome.getFullFastaPtrs().size(), q_, memory_space_t::memory_space_shared);
 
-    this->local_known_intervals = mem_t<Interval>(knownSites.getIntervals().size(), q, memory_space_t::memory_space_shared);
-    this->local_known_intervals_ptrs = mem_t<SpanFieldLong>(knownSites.getIntervalsPtrs().size(), q, memory_space_t::memory_space_shared);
+    this->local_known_intervals = mem_t<Interval>(knownSites.getIntervals().size(), q_, memory_space_t::memory_space_shared);
+    this->local_known_intervals_ptrs = mem_t<SpanFieldLong>(knownSites.getIntervalsPtrs().size(), q_, memory_space_t::memory_space_shared);
 
     // Copy FASTA bases
-    q.memcpy(this->fasta.data(),
+    q_.memcpy(this->fasta.data(),
              referenceGenome.getFullFasta().data(),
              referenceGenome.getFullFasta().size() * sizeof(uint8_t));
 
     // Copy FASTA pointers
-    q.memcpy(this->fasta_ptrs.data(),
+    q_.memcpy(this->fasta_ptrs.data(),
              referenceGenome.getFullFastaPtrs().data(),
              referenceGenome.getFullFastaPtrs().size() * sizeof(SpanFieldLong));
 
     // Copy known-site intervals
-    q.memcpy(this->local_known_intervals.data(),
+    q_.memcpy(this->local_known_intervals.data(),
              knownSites.getIntervals().data(),
              knownSites.getIntervals().size() * sizeof(Interval));
 
     // Copy interval pointers
-    q.memcpy(this->local_known_intervals_ptrs.data(),
+    q_.memcpy(this->local_known_intervals_ptrs.data(),
              knownSites.getIntervalsPtrs().data(),
              knownSites.getIntervalsPtrs().size() * sizeof(SpanFieldLong));
 
     Logger::getLogger().log(LOG_INFO, "Time to flatten fasta and intervals: " + std::to_string(t.elapsed()));
-    this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.qualityScores().size(), q, memory_space_t::memory_space_shared);
-    this->tables_context = mem_t<bqsrEntry>(recalibration_tables.contexts().size(), q, memory_space_t::memory_space_shared);
-    this->tables_cycle = mem_t<bqsrEntry>(recalibration_tables.cycles().size(), q, memory_space_t::memory_space_shared);
+    this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.qualityScores().size(), q_, memory_space_t::memory_space_shared);
+    this->tables_context = mem_t<bqsrEntry>(recalibration_tables.contexts().size(), q_, memory_space_t::memory_space_shared);
+    this->tables_cycle = mem_t<bqsrEntry>(recalibration_tables.cycles().size(), q_, memory_space_t::memory_space_shared);
 
 
     bqsrEntry defaultEntry;
     defaultEntry.Observations = 0;
     defaultEntry.Mismatches = 0;
 
-    q.fill(tables_quality.data(), defaultEntry, recalibration_tables.qualityScores().size());
-    q.fill(tables_cycle.data(), defaultEntry, recalibration_tables.cycles().size());
-    q.fill(tables_context.data(), defaultEntry, recalibration_tables.contexts().size());
-    q.wait();
+    q_.fill(tables_quality.data(), defaultEntry, recalibration_tables.qualityScores().size());
+    q_.fill(tables_cycle.data(), defaultEntry, recalibration_tables.cycles().size());
+    q_.fill(tables_context.data(), defaultEntry, recalibration_tables.contexts().size());
+    q_.wait();
     Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
 }
 

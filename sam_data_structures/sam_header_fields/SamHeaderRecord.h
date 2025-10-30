@@ -18,7 +18,8 @@ public:
     explicit SamHeaderRecord(const std::string& recordType);
 
     void putAttribute(const std::string& key, const std::string& value);
-    std::string getAttribute(const std::string& key) const;
+
+    const std::string &getAttribute(const std::string &key) const;
     bool containsAttribute(const std::string& key) const;
 
     const LinkedHashMap<std::string, std::string>&  getAllAttributes() const;

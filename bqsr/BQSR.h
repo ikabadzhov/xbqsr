@@ -18,7 +18,7 @@
 class BaseRecalibrator {
 public:
     BaseRecalibratorTables& recalibration_tables;
-    sycl::queue q;
+    sycl::queue q_;
     mem_t<Interval> local_known_intervals;
     mem_t<SpanFieldLong> local_known_intervals_ptrs;
     mem_t<SpanFieldLong> fasta_ptrs;
@@ -29,10 +29,10 @@ public:
     mem_t<bqsrEntry> tables_context;
 
     explicit BaseRecalibrator(MappedFasta &referenceGenome, KnownSites &knownSites,
-                              sycl::device &device, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
+                              sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
     void exportTables(BaseRecalibratorTables& recalibration_tables);
     void mergeTables(BaseRecalibratorTables& recalibration_tables);
-    void Recalibrate(sycl::device& device, SamAlignments& reads);
+    void Recalibrate(SamAlignments& reads);
     void close();
 };
 

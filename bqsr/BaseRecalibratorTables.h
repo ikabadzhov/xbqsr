@@ -51,7 +51,7 @@ struct BQSRTableConfig {
 
 class BaseRecalibratorTables {
 public:
-    explicit BaseRecalibratorTables(const BQSRTableConfig& cfg);
+    explicit BaseRecalibratorTables(const BQSRTableConfig& cfg, const sycl::queue& q);
 
     [[nodiscard]] BaseRecalibratorTablesAccessor make_accessor() const noexcept {
         return { nReadGroups, nQualScore, maxCycle, contextLen, nCycleCov, nContextCov };
@@ -88,9 +88,9 @@ public:
 
     void initializeCombinedBQSRTable(bqsrTable& bqsrTable, std::vector<combinedBqsrEntry>& table);
     void FinalizeBQSRTables();
-    void ApplyBQSR(sycl::device& device, SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList);
+    void ApplyBQSR(SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList);
 
-    void PrintBQSRTables(const std::string &filename, std::vector<int32_t>& RG, Header &hdr);
+    void PrintBQSRTables(const std::string &filename, Header &hdr);
     void LoadFromReport(const std::string &filename, Header &hdr);
 
 private:
@@ -121,8 +121,14 @@ private:
     std::vector<uint8_t> staticQuantizedScores;
     std::vector<int64_t> quantizationMap;
     std::vector<uint8_t> quantizedQualityScores;
+
+    sycl::queue q_;
+    sycl::context ctx_;
+    sycl::device dev_;
+
     mem_t<int> recalibrated_quality_scores;
     bool is_apply_bqsr_initialized = false;
+    std::once_flag apply_bqsr_once_;
 };
 
 

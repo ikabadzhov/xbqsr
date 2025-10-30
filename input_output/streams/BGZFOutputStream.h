@@ -68,7 +68,7 @@ private:
 
     // compression level and threads
     int level_{6};
-    std::vector<std::thread> workers_;
+    std::vector<std::jthread> workers_;
 
     // queues
     std::mutex m_;

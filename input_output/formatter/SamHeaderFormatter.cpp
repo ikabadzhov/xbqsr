@@ -1,5 +1,4 @@
 #include "SamHeaderFormatter.h"
-#include "../streams/BufferWriter.h"
 
 void SamHeaderFormatter::FormatSamHeader(Header &hdr, std::string& line) {
     writeHDLine(hdr, line);

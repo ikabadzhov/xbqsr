@@ -22,8 +22,7 @@ public:
         is_removed[key] = false;
     }
 
-    // Retrieves the value for a given key
-    V get(const K& key) const {
+    const V& get(const K& key) const {
         if (!containsKey(key)) {
             throw std::out_of_range("Key not found");
         }

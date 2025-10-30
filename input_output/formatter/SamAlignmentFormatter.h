@@ -4,13 +4,11 @@
 
 #include <string>
 #include "../../sam_data_structures/SamAlignments.h"
-#include "../streams/BufferWriter.h"
 
 class SamAlignmentFormatter {
 
 public:
     static void FormatSamAlignment(SamAlignments& alns, ssize_t idx, std::string& line);
-    static void FormatSamAlignmentFromSlice(SamAlignments& alns, ssize_t idx, BufferWriter &buffer);
 
     static size_t GetSamAlignmentSize(SamAlignments &alns, ssize_t idx);
 

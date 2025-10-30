@@ -1,5 +1,6 @@
 #include "UtilsBQSR.h"
 #include "../filters/UtilsFilters.h"
+#include "../logger/Logger.h"
 
 
 void deviceHardClipAdaptorSequence(CigarOperation *clipped_cigar, SpanField& cigar_ptr, int32_t &POS, char *sequence, SpanField &sequencePtrs, char *QUAL, SpanField &qualPtrs, size_t idx, int32_t RNAME, uint16_t FLAG, int32_t RNEXT, int32_t TLEN, int32_t PNEXT) {
@@ -461,31 +462,27 @@ std::pair<int32_t, CigarOperation> deviceComputeReadCoordinateForReferenceCoordi
     return {-1, CigarOperation{}};
 }
 
-std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx) {
+int32_t readGroupCovariateId(Header& hdr, SamAlignments& reads, size_t idx) {
+    const int32_t rg_id = reads.TAGS.RG[idx];
 
-    std::string rg = hdr.getReadGroupRecord().getString(reads.TAGS.RG[idx]);
-    if(!rg.empty()){
-
-        for( auto& record : hdr.getReadGroupRecord().getAll() ){
-            std::string id = record.getReadGroupId();
-
-            if(!id.empty()) {
-                id = record.getReadGroupId();
-                if (rg == id) {
-                    bool ok = record.getAllAttributes().containsKey("PU");
-                    std::string unit;
-                    if(ok) {
-                        unit = record.getAttribute("PU");
-                        return unit;
-                    }
-                    break;
-                }
-            }
-        }
-        return rg;
-    } else {
-        std::cout<<"Error: bqsr requires input with read groups. Alignment at pos " << idx <<" has no read group."/*Please fix input, e.g. rerun with the --replace-read-group option.*/<<std::endl;
-        exit(-1);
-        std::cout<<"unreachable code" << std::endl;
+    // Basic sanity on RG id against the header’s RG dictionary
+    const auto& rgDict = hdr.getReadGroupRecord();
+    if (rg_id < 0 || rg_id >= rgDict.size()) {
+        Logger::getLogger().log(LOG_FATAL,
+            "BQSR requires reads with valid read groups. Alignment at index ",
+            idx, " has invalid RG id ", rg_id, ".");
+        std::abort();
     }
+
+    // Fast O(1) lookup: PU if present, else RG ID, as a single covariate key
+    const int32_t key = hdr.covKeyForRGId(rg_id);
+    if (key < 0) {
+        // Policy: either error (like default GATK) or allow-missing.
+        // Here we mirror strict behavior:
+        Logger::getLogger().log(LOG_FATAL,
+            "Missing covariate key for RG id ", rg_id,
+            " at alignment index ", idx, ". Did you call buildReadGroupCovariateIndex() after parsing @RG?");
+        std::abort();
+    }
+    return key;
 }

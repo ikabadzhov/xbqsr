@@ -10,6 +10,8 @@
 #include "file_format/MappedFasta.h"
 #include "bqsr/BQSR.h"
 #include "sam_data_structures/SamAlignments.h"
+#include "pipeline/StreamingChannel.h"
+#include "pipeline/StreamingEngine.h"
 #include "bam_data_structures/BamHeader.h"
 #include "input_output/alignment_io/AlignmentReaderFactory.h"
 #include "input_output/alignment_io/AlignmentWriterFactory.h"
@@ -79,20 +81,100 @@ int main(int argc, char **argv) {
             gpus[i].get_info<sycl::info::device::vendor>(), ")");
     }
 
-    // Select the first GPU (index 0)
-
     sycl::device device = gpus[0];
+    sycl::queue queue(device);
     /**** Input parsing for reading Alignment Data *****/
 
-    Logger::getLogger().set_min_severity(LOG_DEBUG);
+    if (args.verbose) {
+        Logger::getLogger().set_min_severity(LOG_DEBUG);
+    } else {
+        Logger::getLogger().set_min_severity(LOG_INFO);
+    }
 
-    std::shared_ptr<Header> header;
-    std::unique_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(args.input_bam);
-    header = std::make_shared<Header>();
+    std::vector<StreamingEngine::StageFn> stages;
+    std::vector<StreamingEngine::FinalizeFn> finals;
+
+    std::shared_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(args.input_bam);
+    std::shared_ptr<AlignmentWriter> alignmentWriter;
+
+    std::shared_ptr<Header> header = std::make_shared<Header>();
     alignmentReader->ParseHeader(*header);
+    header->buildReadGroupCovariateIndex();
 
+    BQSRTableConfig bqsrTableConfig(header->getReadGroupCovariates().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
+    std::shared_ptr<BaseRecalibratorTables> tables;
 
-    std::thread loader_sam([&]() {
+    std::unique_ptr<MappedFasta> referenceGenome;
+    std::unique_ptr<KnownSites>  knownSites;
+    std::shared_ptr<BaseRecalibrator> bqsrRecal;
+
+    // Stage 0: AddREFID filter
+    stages.emplace_back([](SamAlignments& batch){
+        auto addREFID = Filter::AddREFID(batch);
+        for (size_t i = 0; i < batch.GetAlnsNum(); ++i) addREFID(batch, i);
+    });
+
+    if (args.is_recalibrate()) {
+        referenceGenome = std::make_unique<MappedFasta>(args.reference, header);
+        knownSites = std::make_unique<KnownSites>(args.known_sites, header);
+        tables = std::make_shared<BaseRecalibratorTables>(bqsrTableConfig, queue);
+        bqsrRecal = std::make_shared<BaseRecalibrator>(*referenceGenome, *knownSites, queue, *header, *tables);
+
+        // Stage 1: Recalibrate (no output here)
+        stages.emplace_back([recal = bqsrRecal](SamAlignments& batch){
+            recal->Recalibrate(batch);
+        });
+        // Finalize: Print tables at the end of all batch processing
+        finals.emplace_back([&, recal = bqsrRecal, table = tables]{
+            recal->exportTables(*table);
+            table->FinalizeBQSRTables();
+            table->PrintBQSRTables(args.recal_table, *header);
+        });
+    }
+
+    int quantize_level = 0;
+    std::vector<uint8_t> sqqList;
+
+    if (args.is_apply()) {
+        tables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig, queue);
+        tables->LoadFromReport(args.recal_table, *header);
+        alignmentWriter = AlignmentWriterFactory::open(args.output_bam);
+
+        //bqsrRecal = std::make_unique<BaseRecalibrator>(*referenceGenome, *knownSites, device, *header, *tables);
+
+        // Stage 1: Recalibrate (no output here)
+        stages.emplace_back([table = tables, quantLevel=quantize_level, sqqCopy=sqqList](SamAlignments& batch){
+            std::vector<uint8_t> sqqCopyLocal = sqqCopy;
+            table->ApplyBQSR(batch, quantLevel, sqqCopyLocal);
+        });
+
+        // Stage 2: Write out batch on BAM file
+        stages.emplace_back([writer = alignmentWriter](SamAlignments& batch){
+            writer->WriteAlignmentBatch(batch);
+        });
+
+        finals.emplace_back([writer = alignmentWriter]{
+            try {
+                writer->Close();        // close file/FD
+            } catch (...) {
+                throw std::runtime_error("Error while closing output file");
+            }
+        });
+    }
+
+    // Build and run engine
+    StreamingEngine::Config cfg;
+    cfg.channel_capacity = 4;
+    cfg.workers = 1;
+
+    StreamingEngine engine(cfg, stages, finals);
+
+    engine.run_streaming(*alignmentReader, header);
+
+    //if (alignmentWriter) alignmentWriter->Close();
+    // Finalize tables
+
+    /*std::thread loader_sam([&]() {
         Timer t_in_sam;
         t_in_sam.reset();
         print_stage_header("Reading SAM File");
@@ -105,7 +187,6 @@ int main(int argc, char **argv) {
     std::vector<std::unique_ptr<BaseRecalibratorTables>> localBaseRecalibratorTables(gpus.size());
     std::unique_ptr<BaseRecalibratorTables> globalBaseRecalibratorTables;
 
-    BQSRTableConfig bqsrTableConfig(header->getReadGroupRecord().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
 
     if (args.is_recalibrate()) {
         std::vector<std::unique_ptr<BaseRecalibrator>> baseRecals(gpus.size());
@@ -211,7 +292,7 @@ int main(int argc, char **argv) {
         wf->FormatAlignment(alignments);
 
         Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t_out.elapsed()) + " sec");
-    }
+    }*/
     return 0;
 }
 

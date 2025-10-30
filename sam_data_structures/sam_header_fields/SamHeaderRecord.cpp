@@ -19,7 +19,7 @@ void SamHeaderRecord::putAttribute(const std::string &key, const std::string &va
     attributes.put(key, value);
 }
 
-std::string SamHeaderRecord::getAttribute(const std::string &key) const {
+const std::string &SamHeaderRecord::getAttribute(const std::string &key) const {
     return attributes.get(key);
 }
 

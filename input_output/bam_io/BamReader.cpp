@@ -1,5 +1,7 @@
 #include <future>
 #include <execution>
+#include <condition_variable>
+#include <stop_token>
 #include <mutex>
 #include "BamReader.h"
 #include "BamUtilsIO.h"
@@ -375,7 +377,7 @@ ssize_t BamReader::ParseAlignment(std::vector<SamAlignments>& reads, std::shared
     std::exception_ptr loader_ex;
 
     // --- Loader thread ---
-    std::thread loader([&] {
+    std::jthread loader([&] {
         try {
             for (;;) {
                 // Wait until main thread signals "ready"
@@ -456,6 +458,91 @@ ssize_t BamReader::ParseAlignment(std::vector<SamAlignments>& reads, std::shared
     //profiler.report();
     return static_cast<ssize_t>(alnsRead);
 
+}
+
+// In BamReader.cpp
+void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header,
+                                       std::function<void(SamAlignments&&)> on_batch)
+{
+    if (!header_done_) { skip_bam_header(in); header_done_ = true; }
+
+    auto batch_process  = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
+    auto batch_transfer = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
+
+    Carry carry;
+    size_t alnsRead    = 0;
+    bool   first_batch = true;
+
+    // Preload first batch
+    load_batch(batch_process, in);
+
+    std::mutex m;
+    std::condition_variable_any cv;
+    bool ready=false, done=false, stop=false;
+    std::exception_ptr loader_ex;
+
+    std::jthread loader([&] (std::stop_token st) {
+        try {
+            for (;;) {
+                std::unique_lock lk(m);
+                cv.wait(lk, st, [&]{ return ready || stop; });
+                if (st.stop_requested() || stop) break;
+                ready = false;
+                lk.unlock();
+
+                load_batch(batch_transfer, in);
+
+                lk.lock();
+                done = true;
+                lk.unlock();
+                cv.notify_one();
+            }
+        } catch (...) {
+            loader_ex = std::current_exception();
+            std::unique_lock lk(m);
+            done = true;
+            cv.notify_one();
+        }
+    });
+
+    SamAlignments current_batch(header);
+    current_batch.SetAlnsNum(0);
+
+    while (first_batch || batch_process->buffer.has_data()
+           || (carry.stage == Carry::ReadBody && carry.need > 0))
+    {
+        { std::lock_guard lk(m); ready = true; done = false; }
+        cv.notify_one();
+
+        // Fill current_batch from batch_process
+        process_batch(batch_process, current_batch, alnsRead, carry);
+
+        // hand off if we produced anything
+        if (alnsRead > 0) {
+            current_batch.SetAlnsNum(alnsRead);
+            current_batch.Resize(current_batch.GetAlnsNum());
+            on_batch(std::move(current_batch));                 // > > > emit immediately
+            current_batch = SamAlignments(header);              // new empty batch
+            current_batch.SetAlnsNum(0);
+            alnsRead = 0;
+        }
+
+        // Wait for loader
+        {
+            std::unique_lock lk(m);
+            cv.wait(lk, [&]{ return done || loader_ex != nullptr; });
+        }
+        if (loader_ex) std::rethrow_exception(loader_ex);
+
+        // Swap in newly loaded data
+        std::swap(batch_process, batch_transfer);
+        first_batch = false;
+    }
+
+    { std::lock_guard lk(m); stop = true; }
+    loader.request_stop();
+    cv.notify_one();
+    // loader.join(); // No need with jthread
 }
 
 std::string_view BamReader::getslice(size_t numBytesToRead, size_t &numBytesRead) {

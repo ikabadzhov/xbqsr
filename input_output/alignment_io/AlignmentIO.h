@@ -21,6 +21,8 @@ public:
     virtual void ParseHeader(Header& hdr) = 0;
 
     virtual ssize_t ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header) = 0;
+    virtual void ParseAlignmentStreamed(std::shared_ptr<Header> header,
+                                std::function<void(SamAlignments&&)> on_batch) = 0;
     virtual void Close() = 0;
     virtual ~AlignmentReader() = default;
     bool isEOF();
@@ -35,7 +37,11 @@ public:
     AlignmentWriter() = default;
     virtual void FormatHeader(Header& hdr) = 0;
     virtual void FormatAlignment(std::vector<SamAlignments> &reads) = 0;
+    virtual void BeginStreaming() = 0;
+    virtual void WriteAlignmentBatch(SamAlignments& block) = 0;
+    virtual void EndStreaming() = 0;
     virtual void Close() = 0;
+
 
     bool isEOF();
     bool Good(); // Check the internal states of the stream

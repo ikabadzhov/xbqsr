@@ -18,6 +18,6 @@ SYCL_EXTERNAL std::pair<int64_t, CigarOperation> deviceGetReadCoordinateForRefer
 SYCL_EXTERNAL std::pair<int32_t, CigarOperation> deviceComputeReadCoordinateForReferenceCoordinate(CigarOperation* cigar, SpanField &cigar_ptr, int32_t softStart, int32_t refCoord);
 SYCL_EXTERNAL void deviceHardClipSoftClippedBases(CigarOperation* cigar, SpanField& cigar_ptr, int32_t& POS, char* sequence, SpanField& sequencePtrs, char* QUAL, SpanField& qualPtrs, int32_t RNAME, uint16_t FLAG);
 SYCL_EXTERNAL void deviceHardClipCigar(CigarOperation* cigar, SpanField &cigar_ptr, int64_t start, int64_t stop);
-std::string readGroupCovariate(Header &hdr, SamAlignments& reads, size_t idx);
+int32_t readGroupCovariateId(Header &hdr, SamAlignments& reads, size_t idx);
 
 #endif //UTILSBQSR_H

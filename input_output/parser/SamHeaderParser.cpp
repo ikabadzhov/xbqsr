@@ -73,11 +73,10 @@ void SamHeaderParser::ParseRGLine(Header &hdr, ParsedHeaderLine &parsedLine) {
         //auto predictedMedianInsertSize = ;
         if (samReadGroupRecord.containsAttribute("PI")) {
             try {
-                auto predictedMedianInsertSize = samReadGroupRecord.getAttribute("PI");
-                strtoll(predictedMedianInsertSize.c_str(), nullptr, 10);
-                //samReadGroupRecord.setAttribute("PI", predictedMedianInsertSize);
-            } catch (std::exception &e) {
-                std::cerr << "PI is not numeric: " + samReadGroupRecord.getAttribute("PI") << std::endl;
+                const auto& s = samReadGroupRecord.getAttribute("PI");
+                std::stoul(s, nullptr, 10);
+            } catch (...) {
+                throw std::runtime_error("PI is not numeric: " + samReadGroupRecord.getAttribute("PI"));
             }
         }
 

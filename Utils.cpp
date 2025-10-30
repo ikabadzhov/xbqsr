@@ -32,7 +32,8 @@ void init_options( po::options_description &description, bool &help ){
             "recal", po::value<string>(), "Recalibration table file" )(
             "ref", po::value<string>(), "Reference FASTA file (recalibrate command only)" )(
             "known-sites", po::value<string>(), "Comma-delimited list of known variant sites (recalibrate command only)" )(
-            "gpus", po::value<string>(), "Number of GPUs to use (default: 1, or 'all' to use all available GPUs)"
+            "gpus", po::value<string>(), "Number of GPUs to use (default: 1, or 'all' to use all available GPUs)" )(
+            "verbose,v", po::bool_switch(), "Enable verbose output"
     );
 
 }
@@ -292,6 +293,11 @@ Arguments parse_arguments(int argc, char** argv) {
                 exit(-1);
             }
         }
+    }
+
+    // Parse optional --verbose or -v parameter
+    if (vm.count("verbose")) {
+        args.verbose = vm["verbose"].as<bool>();
     }
 
     return args;

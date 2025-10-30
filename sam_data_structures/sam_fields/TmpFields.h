@@ -14,7 +14,7 @@ public:
     std::vector<int32_t> nextREFID;
     std::vector<int32_t> adaptPos;
     std::vector<int32_t> adaptScore;
-    CompressedStringCollection reads_group_covariate_;
+    std::vector<int32_t> reads_group_covariate_;
     void Permute(std::vector<size_t>& indices);
 };
 

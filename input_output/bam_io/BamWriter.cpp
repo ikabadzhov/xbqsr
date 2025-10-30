@@ -5,12 +5,13 @@
 #include "../formatter/SamHeaderFormatter.h"
 #include "../../sam_data_structures/SamHeader.h"
 #include <algorithm>
+#include <stop_token>
 #include <condition_variable>
 #include <cstring>
 #include <stdexcept>
 #include <execution>
 
-#include "../parser/IOBatch.h"
+
 
 BamWriter::BamWriter(std::unique_ptr<OutputStream> sink) : out_(std::move(sink)) {}
 
@@ -95,41 +96,40 @@ inline void pack_seq(const char* seq, int len, uint8_t* dst)
 
 //[[clang::optnone]]
 void BamWriter::FormatHeader(Header& hdr) {
-    if (header_written_) return;
+    std::call_once(header_once_, [&] {
+        //if (header_written_) return;
 
-    // 1) Produce SAM text from your formatter
-    std::string sam_text;
-    SamHeaderFormatter::FormatSamHeader(hdr, sam_text);  // ensure this returns SAM (text) header
+        // 1) Produce SAM text from your formatter
+        std::string sam_text;
+        SamHeaderFormatter::FormatSamHeader(hdr, sam_text);  // ensure this returns SAM (text) header
 
-    // 2) Build BAM header blob: magic + l_text + text + n_ref + refs
-    std::vector<uint8_t> buf;
-    buf.reserve(4096 + sam_text.size());
+        // 2) Build BAM header blob: magic + l_text + text + n_ref + refs
+        std::vector<uint8_t> buf;
+        buf.reserve(4096 + sam_text.size());
 
-    // magic "BAM\1"
-    buf.insert(buf.end(), {'B','A','M','\1'});
+        // magic "BAM\1"
+        buf.insert(buf.end(), {'B','A','M','\1'});
 
-    // l_text
-    push_u32(buf, (uint32_t)sam_text.size());
-    // text
-    buf.insert(buf.end(), sam_text.begin(), sam_text.end());
+        // l_text
+        push_u32(buf, (uint32_t)sam_text.size());
+        // text
+        buf.insert(buf.end(), sam_text.begin(), sam_text.end());
 
-    // references
-    const auto& seqs = hdr.getSequenceDictionary().getAll();
-    push_u32(buf, (uint32_t)seqs.size());
-    for (const auto& r : seqs) {
-        const std::string& name = r.getSequenceName();
-        push_u32(buf, (uint32_t)(name.size() + 1));
-        buf.insert(buf.end(), name.begin(), name.end());
-        buf.push_back('\0');
-        push_u32(buf, (uint32_t)r.getSequenceLength());
-    }
+        // references
+        const auto& seqs = hdr.getSequenceDictionary().getAll();
+        push_u32(buf, (uint32_t)seqs.size());
+        for (const auto& r : seqs) {
+            const std::string& name = r.getSequenceName();
+            push_u32(buf, (uint32_t)(name.size() + 1));
+            buf.insert(buf.end(), name.begin(), name.end());
+            buf.push_back('\0');
+            push_u32(buf, (uint32_t)r.getSequenceLength());
+        }
 
-    out_->write(std::span<const uint8_t>(buf.data(), buf.size()));
-    header_written_ = true;
+        out_->write(std::span<const uint8_t>(buf.data(), buf.size()));
+        header_written_.store(true, std::memory_order_release);
+    });
 }
-
-void store_batch(const std::shared_ptr<OutputBatchBam>& bt, std::unique_ptr<OutputStream>& out) {}
-
 
 inline size_t record_wire_size(SamAlignments& r, size_t idx) {
     const size_t l_qname = r.GetQNAME(idx).size() + 1;  // NUL-terminated in BAM
@@ -336,139 +336,167 @@ static bool process_batch(const std::shared_ptr<OutputBatchBam>& bt,
 }
 
 //[[clang::optnone]]
-void BamWriter::FormatAlignment(std::vector<SamAlignments>& blocks)
-{
+void BamWriter::store_batch_(const std::shared_ptr<OutputBatchBam>& bt,
+                             std::unique_ptr<OutputStream>& out) {
+    const size_t n = bt->used();
+    if (n) out->write(std::span<const uint8_t>(bt->data(), n));
+    bt->reset(); // clean right after write
+}
+
+void BamWriter::BeginStreaming() {
     if (!header_written_) throw std::runtime_error("header must be written first");
     if (!out_)            throw std::runtime_error("no output stream");
+    if (streaming_started_) return;
 
-    auto batch_process  = std::make_shared<OutputBatchBam>(DEFAULT_BUFFER_SIZE);
-    auto batch_transfer = std::make_shared<OutputBatchBam>(DEFAULT_BUFFER_SIZE);
+    writer_ex_ = nullptr;
+    producer_ex_ = nullptr;
+    have_work_ = wrote_ = stop_ = false;
 
-    // Writer thread sync
-    std::mutex m;
-    std::condition_variable cv;
-    bool have_work = false;
-    bool wrote     = false;
-    bool stop      = false;
-    std::exception_ptr writer_ex, producer_ex;
+    batch_process_  = std::make_shared<OutputBatchBam>(DEFAULT_BUFFER_SIZE);
+    batch_transfer_ = std::make_shared<OutputBatchBam>(DEFAULT_BUFFER_SIZE);
 
-    // Writer: writes current batch_transfer, then resets it
-    auto store_batch = [](const std::shared_ptr<OutputBatchBam>& bt,
-                          std::unique_ptr<OutputStream>& out) {
-        const size_t n = bt->used();
-        if (n) out->write(std::span<const uint8_t>(bt->data(), n));
-        bt->reset(); // make it clean right after write
-    };
-
-    std::thread writer([&]{
+    // spawn writer thread once
+    writer_thread_ = std::jthread([this] (std::stop_token st) {
         try {
             for (;;) {
-                std::unique_lock lk(m);
-                cv.wait(lk, [&]{ return have_work || stop; });
-                if (stop && !have_work) break;
-                have_work = false;
-                auto bt = batch_transfer;
+                std::unique_lock lk(m_);
+                cv_.wait(lk, st, [&]{ return have_work_ || stop_; });
+                if (st.stop_requested()) break;
+                if (stop_ && !have_work_) break;
+                have_work_ = false;
+                auto bt = batch_transfer_;
                 lk.unlock();
 
-                store_batch(bt, out_);
+                store_batch_(bt, out_);
 
                 lk.lock();
-                wrote = true;
+                wrote_ = true;
                 lk.unlock();
-                cv.notify_one();
+                cv_.notify_one();
             }
         } catch (...) {
-            writer_ex = std::current_exception();
-            std::lock_guard<std::mutex> lk(m);
-            wrote = true;
-            cv.notify_one();
+            writer_ex_ = std::current_exception();
+            std::lock_guard<std::mutex> lk(m_);
+            wrote_ = true;
+            cv_.notify_one();
         }
     });
 
-    // Producer
-    const size_t total_blocks = blocks.size();
-    size_t blk_idx = 0;
-    size_t aln_idx = 0;
+    streaming_started_ = true;
+}
+
+void BamWriter::WriteAlignmentBatch(SamAlignments& block) {
+    FormatHeader(block.GetHdr()); // guarded by call_once
+    if (!streaming_started_) BeginStreaming();
 
     try {
-        // Pre-fill one batch
-        batch_process->reset();
-        while (blk_idx < total_blocks && batch_process->used() == 0) {
-            size_t n_emitted = 0;
-            const bool any = process_batch(batch_process, blocks[blk_idx], aln_idx, n_emitted);
-            if (!any) { ++blk_idx; aln_idx = 0; continue; }
-            aln_idx += n_emitted;
-            if (aln_idx >= (size_t)blocks[blk_idx].GetAlnsNum()) { ++blk_idx; aln_idx = 0; }
+        // Keep filling the process buffer with this block’s alignments,
+        // handing off to the writer whenever the buffer has data.
+        size_t aln_idx = 0;
+        const size_t n_alns = static_cast<size_t>(block.GetAlnsNum());
+
+        // If process buffer is empty, ensure it’s reset
+        if (batch_process_->used() == 0) {
+            batch_process_->reset();
         }
 
-        bool first_iteration = true;
-        while ( first_iteration
-             || batch_process->used() > 0
-             || blk_idx < total_blocks )
-        {
-            first_iteration = false;
+        while (aln_idx < n_alns) {
+            size_t n_emitted = 0;
+            const bool any = process_batch(batch_process_, block, aln_idx, n_emitted);
+            if (!any) break;               // nothing written for this block (e.g., no data)
+            aln_idx += n_emitted;
 
-            // If no filled buffer yet but we have more input, try to produce one now
-            if (batch_process->used() == 0 && blk_idx < total_blocks) {
-                batch_process->reset();
-                while (blk_idx < total_blocks && batch_process->used() == 0) {
-                    size_t n_emitted = 0;
-                    const bool any = process_batch(batch_process, blocks[blk_idx], aln_idx, n_emitted);
-                    if (!any) { ++blk_idx; aln_idx = 0; continue; }
-                    aln_idx += n_emitted;
-                    if (aln_idx >= (size_t)blocks[blk_idx].GetAlnsNum()) { ++blk_idx; aln_idx = 0; }
-                }
-                if (batch_process->used() == 0 && blk_idx >= total_blocks) break; // nothing left
-            }
-
-            if (batch_process->used() > 0) {
-                // Hand off buffer
+            // If we produced *any* bytes, hand off immediately to overlap I/O
+            if (batch_process_->used() > 0) {
                 {
-                    std::unique_lock lk(m);
-                    wrote = false;
-                    std::swap(batch_process, batch_transfer);
-                    have_work = true;
+                    std::unique_lock lk(m_);
+                    wrote_ = false;
+                    std::swap(batch_process_, batch_transfer_);
+                    have_work_ = true;
                     lk.unlock();
-                    cv.notify_one();
+                    cv_.notify_one();
                 }
 
-                // Pre-produce next batch while writer runs (single call)
-                batch_process->reset();
-                while (blk_idx < total_blocks && batch_process->used() == 0) {
-                    size_t n_emitted = 0;
-                    const bool any = process_batch(batch_process, blocks[blk_idx], aln_idx, n_emitted);
-                    if (!any) { ++blk_idx; aln_idx = 0; continue; }
-                    aln_idx += n_emitted;
-                    if (aln_idx >= (size_t)blocks[blk_idx].GetAlnsNum()) { ++blk_idx; aln_idx = 0; }
-                }
+                // We can start filling the other buffer right away
+                batch_process_->reset();
 
-                // Wait writer
+                // Optional: if you want strict backpressure, wait here until write completes:
                 {
-                    std::unique_lock lk(m);
-                    cv.wait(lk, [&]{ return wrote || writer_ex != nullptr; });
+                    std::unique_lock lk(m_);
+                    cv_.wait(lk, [&]{ return wrote_ || writer_ex_ != nullptr; });
                 }
-                if (writer_ex) break; // will rethrow below
-            } else {
-                // Nothing to write now; loop will exit if no more input
-                continue;
+                if (writer_ex_) std::rethrow_exception(writer_ex_);
             }
         }
     } catch (...) {
-        producer_ex = std::current_exception();
+        producer_ex_ = std::current_exception();
+        // propagate immediately
+        if (producer_ex_) std::rethrow_exception(producer_ex_);
+    }
+}
+
+void BamWriter::EndStreaming() {
+    if (!streaming_started_) return;
+
+    try {
+        // Flush any remaining bytes in process buffer
+        if (batch_process_ && batch_process_->used() > 0) {
+            {
+                std::unique_lock lk(m_);
+                wrote_ = false;
+                std::swap(batch_process_, batch_transfer_);
+                have_work_ = true;
+                lk.unlock();
+                cv_.notify_one();
+            }
+            // Wait for the final write
+            {
+                std::unique_lock lk(m_);
+                cv_.wait(lk, [&]{ return wrote_ || writer_ex_ != nullptr; });
+            }
+            if (writer_ex_) std::rethrow_exception(writer_ex_);
+        }
+    } catch (...) {
+        producer_ex_ = std::current_exception();
     }
 
-    // Shutdown writer
+    // Shutdown writer thread
     {
-        std::lock_guard lk(m);
-        stop = true;
+        std::lock_guard lk(m_);
+        stop_ = true;
     }
-    cv.notify_one();
-    writer.join();
+    writer_thread_.request_stop();
+    cv_.notify_one();
 
-    if (producer_ex) std::rethrow_exception(producer_ex);
-    if (writer_ex)   std::rethrow_exception(writer_ex);
+    if (writer_thread_.joinable()) writer_thread_.join();
+
+    streaming_started_ = false;
+
+    if (producer_ex_) std::rethrow_exception(producer_ex_);
+    if (writer_ex_)   std::rethrow_exception(writer_ex_);
+}
+
+void BamWriter::FormatAlignment(std::vector<SamAlignments>& blocks) {
+    if (!header_written_) throw std::runtime_error("header must be written first");
+    if (!out_)            throw std::runtime_error("no output stream");
+
+    BeginStreaming();
+    for (auto& blk : blocks) {
+        WriteAlignmentBatch(blk);
+    }
+    EndStreaming();
 }
 
 void BamWriter::Close() {
-    out_->close();
+    if (streaming_started_) {
+        EndStreaming();
+    }
+    if (out_) out_->close();
+}
+
+BamWriter::~BamWriter() {
+    // best-effort, but avoid double work:
+    /*try {
+        if (streaming_started_) EndStreaming();
+    } catch (...) {}*/
 }

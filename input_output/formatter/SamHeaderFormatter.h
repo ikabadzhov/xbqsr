@@ -4,7 +4,6 @@
 #include <string>
 #include "../../sam_data_structures/sam_header_fields/SequenceField.h"
 #include "../../sam_data_structures/SamHeader.h"
-#include "../streams/BufferWriter.h"
 
 class SamHeaderFormatter {
 public:

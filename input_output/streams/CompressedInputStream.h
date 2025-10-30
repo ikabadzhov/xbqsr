@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
+#include <array>
 #include <fcntl.h>
 #include <cinttypes>
 #include "PlainInputStream.h"

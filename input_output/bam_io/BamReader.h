@@ -23,6 +23,8 @@ public:
     void ParseHeader(Header& hdr) override;
     void Close() override;
     ssize_t ParseAlignment(std::vector<SamAlignments> &reads, std::shared_ptr<Header> &header) override;
+    void ParseAlignmentStreamed(std::shared_ptr<Header> header,
+                                std::function<void(SamAlignments&&)> on_batch) override;
 };
 
 

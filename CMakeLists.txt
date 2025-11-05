@@ -1,68 +1,123 @@
 cmake_minimum_required(VERSION 3.22)
-SET(CMAKE_C_COMPILER icx)
-SET(CMAKE_CXX_COMPILER icpx)
 
-project(bqsr)
+# Use oneAPI compilers
+set(CMAKE_C_COMPILER icx)
+set(CMAKE_CXX_COMPILER icpx)
 
-SET(CMAKE_CXX_STANDARD 20)
+project(bqsr LANGUAGES C CXX)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -g -O2")
+# Build types
+set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -O2")
 
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=nvptx64-nvidia-cuda -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_75 -Wall")
-#SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=nvptx64-nvidia-cuda,spir64_x86_64 -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_89 -Wall")
+# ------------------------------------------------------------------------------
+# SYCL multi-backend configuration (fat binary)
+# ------------------------------------------------------------------------------
 
+# Targets:
+#  - spir64:      CPU + Intel GPUs (Level Zero/OpenCL)
+#  - nvptx64-...: NVIDIA GPUs (CUDA backend)
+#  - amdgcn-... : AMD GPUs (HIP backend)
+#
+# Adjust offload arch values to match your actual hardware:
+#  - sm_89   : NVIDIA L40S / Ada
+#  - gfx90a  : AMD MI210
+#
+set(SYCL_TARGETS "spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa")
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=${SYCL_TARGETS} -Wall")
 
+# Per-backend arch flags
+# (CMake treats them as separate arguments; ok to append here)
+set(CMAKE_CXX_FLAGS
+		"${CMAKE_CXX_FLAGS}
+     -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89
+     -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a"
+)
+
+# oneAPI toolchain usually links SYCL/OpenCL automatically via icpx,
+# but if your environment needs explicit libs you can keep these:
+set(CMAKE_EXE_LINKER_FLAGS
+		"${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl"
+)
+
+# ------------------------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------------------------
 
 find_package(ZLIB REQUIRED)
 find_library(LIBDEFLATE_LIBRARY deflate REQUIRED)
 find_package(Boost 1.63.0 COMPONENTS program_options REQUIRED)
-find_package(TBB)
-include_directories( ${Boost_INCLUDE_DIR})
+find_package(TBB REQUIRED)
 
-add_executable(bqsr main.cpp
+include_directories(${Boost_INCLUDE_DIR})
+
+# ------------------------------------------------------------------------------
+# Sources
+# ------------------------------------------------------------------------------
+
+add_executable(bqsr
+		main.cpp
 		sam_data_structures/sam_fields/Sequence.cpp
 		input_output/utils/StringScanner.cpp
 		sam_data_structures/SamHeader.cpp
 		input_output/alignment_io/AlignmentIO.cpp
-        Utils.cpp
-		sam_data_structures/sam_fields/Cigar.cpp file_format/Global.cpp filters/Filter.cpp
-		filters/FilterAlignment.cpp Utils.cpp
-		bqsr/BQSR.cpp bqsr/BQSR.h intervals/Interval.cpp intervals/Interval.h
-        filters/UtilsFilters.cpp filters/UtilsFilters.h
-		file_format/MappedFasta.cpp file_format/MappedFasta.h
-		bqsr/TablesBQSR.h bqsr/TablesBQSR.cpp
-		bqsr/BaseRecalibratorTables.cpp bqsr/BaseRecalibratorTables.h
-		sam_data_structures/SamAlignments.cpp sam_data_structures/SamAlignments.h
-		sam_data_structures/sam_fields/OptionalFields.cpp sam_data_structures/sam_fields/OptionalFields.h
-		sam_data_structures/sam_fields/TmpFields.cpp sam_data_structures/sam_fields/TmpFields.h
-		data_types/CompressedStringType.cpp data_types/CompressedStringCollection.h
-		data_types/StringCollection.cpp data_types/StringCollection.h
-		data_types/VectorCollection.cpp data_types/VectorCollection.h
-		data_types/TagsCollection.h data_types/BitVector.cpp data_types/BitVector.h
+		Utils.cpp
+		sam_data_structures/sam_fields/Cigar.cpp
+		file_format/Global.cpp
+		filters/Filter.cpp
+		filters/FilterAlignment.cpp
+		bqsr/BQSR.cpp
+		bqsr/BQSR.h
+		intervals/Interval.cpp
+		intervals/Interval.h
+		filters/UtilsFilters.cpp
+		filters/UtilsFilters.h
+		file_format/MappedFasta.cpp
+		file_format/MappedFasta.h
+		bqsr/TablesBQSR.h
+		bqsr/TablesBQSR.cpp
+		bqsr/BaseRecalibratorTables.cpp
+		bqsr/BaseRecalibratorTables.h
+		sam_data_structures/SamAlignments.cpp
+		sam_data_structures/SamAlignments.h
+		sam_data_structures/sam_fields/OptionalFields.cpp
+		sam_data_structures/sam_fields/OptionalFields.h
+		sam_data_structures/sam_fields/TmpFields.cpp
+		sam_data_structures/sam_fields/TmpFields.h
+		data_types/CompressedStringType.cpp
+		data_types/CompressedStringCollection.h
+		data_types/StringCollection.cpp
+		data_types/StringCollection.h
+		data_types/VectorCollection.cpp
+		data_types/VectorCollection.h
+		data_types/TagsCollection.h
+		data_types/BitVector.cpp
+		data_types/BitVector.h
 		data_types/TagsCollection.cpp
 		data_types/LIBIDStringMapper.cpp
 		data_types/RGStringMapper.cpp
 		input_output/bam_io/BamReader.cpp
-		input_output/bam_io/BamReader.h input_output/bam_io/BamWriter.cpp
+		input_output/bam_io/BamReader.h
+		input_output/bam_io/BamWriter.cpp
 		input_output/bam_io/BamWriter.h
 		bam_data_structures/BamHeader.cpp
 		bam_data_structures/BamHeader.h
 		input_output/alignment_io/AlignmentReaderFactory.cpp
 		input_output/alignment_io/AlignmentReaderFactory.h
-        input_output/streams/CompressedInputStream.cpp
-        input_output/streams/CompressedInputStream.h
+		input_output/streams/CompressedInputStream.cpp
+		input_output/streams/CompressedInputStream.h
 		input_output/streams/PlainInputStream.cpp
 		input_output/streams/PlainInputStream.h
-        input_output/streams/SamStream.cpp
-        input_output/streams/SamStream.h
+		input_output/streams/SamStream.cpp
+		input_output/streams/SamStream.h
 		input_output/streams/InputStream.h
-        input_output/streams/BufferReader.cpp
-        input_output/streams/BufferReader.h
+		input_output/streams/BufferReader.cpp
+		input_output/streams/BufferReader.h
 		input_output/utils/ByteScanner.cpp
 		data_types/LinkedHashMap.h
 		sam_data_structures/sam_header_fields/ReadGroupField.cpp
@@ -156,4 +211,17 @@ add_executable(bqsr main.cpp
 		data_types/StringDictionary.h
 )
 
-target_link_libraries(bqsr TBB::tbb /opt/intel/oneapi/advisor/latest/lib64/libittnotify.a pthread dl atomic ${Boost_LIBRARIES} ZLIB::ZLIB ${LIBDEFLATE_LIBRARY})
+# ------------------------------------------------------------------------------
+# Linking
+# ------------------------------------------------------------------------------
+
+target_link_libraries(bqsr
+		TBB::tbb
+		pthread
+		dl
+		atomic
+		${Boost_LIBRARIES}
+		ZLIB::ZLIB
+		${LIBDEFLATE_LIBRARY}
+		/opt/intel/oneapi/advisor/latest/lib64/libittnotify.a
+)

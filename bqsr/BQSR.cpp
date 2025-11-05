@@ -493,9 +493,6 @@ void BaseRecalibrator::mergeTables(BaseRecalibratorTables &recalibration_tables)
     merge_one_table(recalibration_tables.contexts().table, tables_context);
 }
 
-
-
-
 double estimateHierarchicalBayesianQuality(double epsilon, combinedBqsrEntry& empiricalReadGroupEntry, bqsrEntry& empiricalBqEntry, bqsrEntry& empiricalContextEntry, bqsrEntry& empiricalCycleEntry) {
     double deltaGlobalQuality = 0.0;
     double deltaReportedQuality = 0.0;

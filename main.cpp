@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
         Logger::getLogger().set_min_severity(LOG_INFO);
     }
 
-    std::vector<StreamingEngine::StageFn> stages;
+    std::vector<StreamingEngine::Stage> stages;
     std::vector<StreamingEngine::FinalizeFn> finals;
 
     std::shared_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(args.input_bam);
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
     std::shared_ptr<BaseRecalibrator> bqsrRecal;
 
     // Stage 0: AddREFID filter
-    stages.emplace_back([](SamAlignments& batch){
+    stages.emplace_back("AddREFID", [](SamAlignments& batch){
         auto addREFID = Filter::AddREFID(batch);
         for (size_t i = 0; i < batch.GetAlnsNum(); ++i) addREFID(batch, i);
     });
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
         bqsrRecal = std::make_shared<BaseRecalibrator>(*referenceGenome, *knownSites, queue, *header, *tables);
 
         // Stage 1: Recalibrate (no output here)
-        stages.emplace_back([recal = bqsrRecal](SamAlignments& batch){
+        stages.emplace_back("BQSR-Recalibrate", [recal = bqsrRecal](SamAlignments& batch){
             recal->Recalibrate(batch);
         });
         // Finalize: Print tables at the end of all batch processing
@@ -143,13 +143,13 @@ int main(int argc, char **argv) {
         //bqsrRecal = std::make_unique<BaseRecalibrator>(*referenceGenome, *knownSites, device, *header, *tables);
 
         // Stage 1: Recalibrate (no output here)
-        stages.emplace_back([table = tables, quantLevel=quantize_level, sqqCopy=sqqList](SamAlignments& batch){
+        stages.emplace_back("BQSR-Apply", [table = tables, quantLevel=quantize_level, sqqCopy=sqqList](SamAlignments& batch){
             std::vector<uint8_t> sqqCopyLocal = sqqCopy;
             table->ApplyBQSR(batch, quantLevel, sqqCopyLocal);
         });
 
         // Stage 2: Write out batch on BAM file
-        stages.emplace_back([writer = alignmentWriter](SamAlignments& batch){
+        stages.emplace_back("Write as BAM", [writer = alignmentWriter](SamAlignments& batch){
             writer->WriteAlignmentBatch(batch);
         });
 
@@ -166,133 +166,14 @@ int main(int argc, char **argv) {
     StreamingEngine::Config cfg;
     cfg.channel_capacity = 4;
     cfg.workers = 1;
-
-    StreamingEngine engine(cfg, stages, finals);
+    Timer t;
+    t.reset();
+    StreamingEngine engine(cfg, (std::move(stages)), (std::move(finals)));
 
     engine.run_streaming(*alignmentReader, header);
+    //t.elapsed();
+    Logger::getLogger().log(LOG_INFO, "Time to run all stages: " + std::to_string(t.elapsed()) + " sec");
 
-    //if (alignmentWriter) alignmentWriter->Close();
-    // Finalize tables
-
-    /*std::thread loader_sam([&]() {
-        Timer t_in_sam;
-        t_in_sam.reset();
-        print_stage_header("Reading SAM File");
-        alignmentReader->ParseAlignment(alignments, header);
-
-        Logger::getLogger().log(LOG_INFO, "Time to import all alignments: " + std::to_string(t_in_sam.elapsed()) + " sec");
-    });
-
-
-    std::vector<std::unique_ptr<BaseRecalibratorTables>> localBaseRecalibratorTables(gpus.size());
-    std::unique_ptr<BaseRecalibratorTables> globalBaseRecalibratorTables;
-
-
-    if (args.is_recalibrate()) {
-        std::vector<std::unique_ptr<BaseRecalibrator>> baseRecals(gpus.size());
-
-        std::thread loader_fasta([&]() {
-            Timer t_in_ref;
-            t_in_ref.reset();
-            globalBaseRecalibratorTables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
-            MappedFasta referenceGenome(args.reference, header);
-            KnownSites known_sites(args.known_sites, header);
-
-            tbb::parallel_for(0UL, gpus.size(), [&](size_t dev_idx) {
-                localBaseRecalibratorTables[dev_idx] = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
-                baseRecals[dev_idx] = std::make_unique<BaseRecalibrator>(referenceGenome, known_sites, gpus[dev_idx], *header, *localBaseRecalibratorTables[dev_idx]);
-            });
-            Logger::getLogger().log(LOG_INFO, "Time to read reference genome: " + std::to_string(t_in_ref.elapsed()) + " sec");
-        });
-        loader_fasta.join();
-
-        loader_sam.join();
-
-        for (size_t i = 0; i < alignments.size(); i++) {
-            auto addREFID = Filter::AddREFID(alignments[i]);
-            for (size_t idx = 0; idx < alignments[i].GetAlnsNum(); idx++) {
-                addREFID(alignments[i], idx);
-            }
-        }
-
-        print_stage_header("BQSR - Recalibrate");
-
-        Timer t_recal;
-        t_recal.reset();
-
-        size_t workload = (alignments.size() + n_gpus - 1) / n_gpus;
-
-        tbb::parallel_for(0, n_gpus, [&](size_t dev_idx) {
-            for (size_t i = workload * dev_idx; i < workload * dev_idx + workload; i++) {
-                if (i >= alignments.size()) {
-                    return;
-                }
-                baseRecals[dev_idx]->Recalibrate(gpus[dev_idx], alignments[i]);
-            }
-        });
-        for (size_t dev_idx = 0; dev_idx < gpus.size(); dev_idx++) {
-            baseRecals[dev_idx]->exportTables(*localBaseRecalibratorTables[dev_idx]);
-            globalBaseRecalibratorTables->merge(*localBaseRecalibratorTables[dev_idx]);
-        }
-
-        globalBaseRecalibratorTables->FinalizeBQSRTables();
-
-        Logger::getLogger().log(LOG_INFO, "Time to compute BQSR tables: " + std::to_string(t_recal.elapsed()) + " sec");
-
-        globalBaseRecalibratorTables->PrintBQSRTables(args.recal_table, alignments[0].TAGS.RG, *header);
-    }
-
-    if (args.is_apply()) {
-        Timer t_apply;
-        t_apply.reset();
-
-        tbb::parallel_for(0, n_gpus, [&](size_t dev_idx) {
-            localBaseRecalibratorTables[dev_idx] = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig);
-            localBaseRecalibratorTables[dev_idx]->LoadFromReport(args.recal_table, *header);
-        });
-
-        Logger::getLogger().log(LOG_INFO, "Time to load BQSR table from file: " + std::to_string(t_apply.elapsed()) + " sec");
-
-        loader_sam.join();
-
-        print_stage_header("BQSR - Apply");
-
-        for (size_t batchIdx = 0; batchIdx < alignments.size(); ++batchIdx) {
-            auto addREFID = Filter::AddREFID(alignments[batchIdx]);
-            for (size_t idx = 0; idx < alignments[batchIdx].GetAlnsNum(); idx++) {
-                addREFID(alignments[batchIdx], idx);
-            }
-        }
-
-        t_apply.reset();
-
-        int quantize_level = 0;
-        std::vector<uint8_t> sqqList;
-
-        size_t workload = (alignments.size() + n_gpus - 1) / n_gpus;
-
-        tbb::parallel_for(0, n_gpus, [&](size_t dev_idx) {
-            for (size_t i = workload * dev_idx; i < workload * dev_idx + workload; i++) {
-                if (i >= alignments.size()) {
-                    return;
-                }
-                localBaseRecalibratorTables[dev_idx]->ApplyBQSR(gpus[dev_idx], alignments[i], quantize_level, sqqList);
-            }
-        });
-
-        Logger::getLogger().log(LOG_INFO, "Time to apply BQSR: " + std::to_string(t_apply.elapsed()) + " sec");
-
-        Timer t_out;
-        t_out.reset();
-        print_stage_header("Writing SAM File");
-
-        std::unique_ptr<AlignmentWriter> wf = AlignmentWriterFactory::open(args.output_bam);
-
-        wf->FormatHeader(*header);
-        wf->FormatAlignment(alignments);
-
-        Logger::getLogger().log(LOG_INFO, "Time to Write reads on disk: " + std::to_string(t_out.elapsed()) + " sec");
-    }*/
     return 0;
 }
 

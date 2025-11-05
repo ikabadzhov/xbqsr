@@ -39,16 +39,26 @@ struct bqsrTableKeyHasher
     }
 };
 
+
 struct bqsrEntry {
     //uint8_t EmpiricalQuality{};
     int64_t Observations{};
     int64_t Mismatches{};
 
-    explicit bqsrEntry(int64_t observ, int64_t mis) : Observations(observ), Mismatches(mis) {}
+    // Defaulted constructor and trivial copy/move operations
     bqsrEntry() = default;
+    bqsrEntry(const bqsrEntry&) = default;
+    bqsrEntry& operator=(const bqsrEntry&) = default;
+
+    explicit bqsrEntry(int64_t observ, int64_t mis) : Observations(observ), Mismatches(mis) {}
 
     SYCL_EXTERNAL uint8_t calculateEmpiricalQuality(double priorQual);
 };
+
+// Sanity check: this must pass
+static_assert(std::is_trivially_copyable_v<bqsrEntry>,
+              "bqsrEntry must be trivially copyable for SYCL device use");
+
 
 class bqsrTable {
 public:

@@ -274,7 +274,7 @@ void AppyBqsrKernelData::memcpy_dev_to_host(sycl::queue &transfer_queue, ApplyBq
     Timer t;
     t.reset();
 
-    transfer_queue.memcpy(dest.h_qual + dest_offset, src.d_qualities, sizeof(dest.h_qual[0]) * n_elements);
+    transfer_queue.memcpy(dest.h_qual + src.sequence_span_offset, src.d_qualities, sizeof(dest.h_qual[0]) * src.chunk_sz);
     transfer_queue.wait();
     Logger::getLogger().log(LOG_DEBUG, "    [Moving out flags] Time: " + std::to_string(t.elapsed()) + " sec");
 }

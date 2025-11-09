@@ -180,7 +180,7 @@ public:
 
             if (!memory_buffer) {
                 std::cerr << "Error: Memory allocation failed for one or more pointers." << std::endl;
-                exit(-1);
+                abort();
             }
         }
         this->max_memory = max_memory;

@@ -10,8 +10,8 @@
 
 const int32_t globalQualityScorePrior = -1;
 
-//[[clang::optnone]]
-void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>> batch) {
+// //[[clang::optnone]]
+ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>> batch) {
     if (batch->_n <= 0) {
         return;
     }
@@ -114,7 +114,7 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
                     auto lbs = cta_load_balance_t<nt, vt>().load_balance(count, d_temporary_segments_sequences_offsets, num_reads, tid, cta, mp_data, shared[0].lbs, item);
 
                     strided_iterate<nt, vt, vt>([&](int k, int j) {
-                        int output_i = lbs.merge_range.a_begin + j;
+                        //int output_i = lbs.merge_range.a_begin + j;
                         int idx = lbs.segments[k];
                         int i = lbs.ranks[k];
 
@@ -218,4 +218,4 @@ void apply_bqsr_kernel(std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelC
     }
     batch->_q_process.wait_and_throw();
     Logger::getLogger().log(LOG_DEBUG, "    [UpdateBaseQualityScore kernel] Time: " + std::to_string(t.elapsed()) + " sec");
-}
+     }

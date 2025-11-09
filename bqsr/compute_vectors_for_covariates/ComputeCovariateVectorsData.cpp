@@ -137,7 +137,7 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
                                size_t src_offset, size_t n_elements) {
     Timer t;
     t.reset();
-    size_t actual_data_movement = 0;
+
     try {
         if (dest.is_first_copy) {
             dest.d_known_sites_ptr = src.h_known_sites_ptr; // SHARED MEMORY HOST-DEV
@@ -461,7 +461,7 @@ void ComputeSkipSliceKernelData::memcpy_host_to_dev(sycl::queue& transfer_queue,
         }
         transfer_queue.wait_and_throw();
 
-        Logger::getLogger().log(LOG_DEBUG, "    \tActual number of reads in batch: ", dest.max_num_elements);
+        Logger::getLogger().log(LOG_DEBUG, "    \tActual number of reads in batch: ", n_elements);
     } catch (sycl::exception& e) {
         Logger::getLogger().log(LOG_ERROR, "Error during memory copy from host to device: ", e.what());
     }

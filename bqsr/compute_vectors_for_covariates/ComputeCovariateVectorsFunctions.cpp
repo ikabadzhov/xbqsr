@@ -345,217 +345,168 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
         });
     batch->_q_process.wait_and_throw();
 
-    batch->_q_process.parallel_for<class Clipping>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
-        if (!d_recalibrated[idx]) {
-            return;
-        }
-        SpanField clip_span;
-        clip_span.start = d_clipped_cigar_start[idx];
-        clip_span.len   = d_clipped_cigar_len[idx];  // initialized to original L
+     batch->_q_process.parallel_for<class Clipping>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+         if (!d_recalibrated[idx]) {
+             return;
+         }
+         SpanField clip_span;
+         clip_span.start = d_clipped_cigar_start[idx];
+         clip_span.len   = d_clipped_cigar_len[idx];  // initialized to original L
 
-        deviceHardClipAdaptorSequence(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
-                                      d_qualities, d_sequences_ptr[idx], idx, d_rname[idx],
-                                      d_flag[idx],
-                                      d_rnext[idx], d_tlen[idx],
-                                      d_pnext[idx]);
+         deviceHardClipAdaptorSequence(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
+                                       d_qualities, d_sequences_ptr[idx], idx, d_rname[idx],
+                                       d_flag[idx],
+                                       d_rnext[idx], d_tlen[idx],
+                                       d_pnext[idx]);
 
-        if (d_sequences_ptr[idx].len == 0) {
-            d_clipped_cigar_start[idx] = clip_span.start;
-            d_clipped_cigar_len[idx]   = clip_span.len;
-            return;
-        }
-        deviceHardClipSoftClippedBases(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
-                                      d_qualities, d_sequences_ptr[idx], d_rname[idx],
-                                   d_flag[idx]);
+         if (d_sequences_ptr[idx].len == 0) {
+             d_clipped_cigar_start[idx] = clip_span.start;
+             d_clipped_cigar_len[idx]   = clip_span.len;
+             return;
+         }
+         deviceHardClipSoftClippedBases(d_clipped_cigar, clip_span, d_pos[idx], d_sequences, d_sequences_ptr[idx],
+                                       d_qualities, d_sequences_ptr[idx], d_rname[idx],
+                                    d_flag[idx]);
 
-        d_clipped_cigar_start[idx] = clip_span.start;
-        d_clipped_cigar_len[idx]   = clip_span.len;
-        d_stranded_seq_ptr[idx] = d_sequences_ptr[idx];
-        d_base_context_ptr[idx] = d_sequences_ptr[idx];
+         d_clipped_cigar_start[idx] = clip_span.start;
+         d_clipped_cigar_len[idx]   = clip_span.len;
+         d_stranded_seq_ptr[idx] = d_sequences_ptr[idx];
+         d_base_context_ptr[idx] = d_sequences_ptr[idx];
 
-    });
-    batch->_q_process.wait_and_throw();
-    Logger::getLogger().log(LOG_DEBUG, "    [Clip Sequences kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+     });
+     batch->_q_process.wait_and_throw();
+     Logger::getLogger().log(LOG_DEBUG, "    [Clip Sequences kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-    profile.stop(StageId::ClipSequences);
+     profile.stop(StageId::ClipSequences);
 
-    t.reset();
-    profile.start(StageId::ComputeSkipVector);
-    Timer t2;
-    t2.reset();
-    batch->_q_process.parallel_for<class ComputeSkipSliceVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+     t.reset();
+     profile.start(StageId::ComputeSkipVector);
+     Timer t2;
+     t2.reset();
+     batch->_q_process.parallel_for<class ComputeSkipSliceVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
 
-        if (!d_recalibrated[idx]) {
-            return;
-        }
-        if (d_sequences_ptr[idx].len == 0) {
-            return;
-        }
+         if (!d_recalibrated[idx]) {
+             return;
+         }
+         if (d_sequences_ptr[idx].len == 0) {
+             return;
+         }
 
-        int64_t sftStart = 0;
-        {
-            auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
-            auto start = d_pos[idx];
-            for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
-                CigarOperation op = cigar[i];
-                if (op.Operation == 'S') {
-                    start -= op.Length;
-                } else if (op.Operation != 'H') {
-                    break;
-                }
-            }
-            sftStart = static_cast<int32_t>(start);
-        }
-
-        /*
-         * Reduce by segment
-         * Segments: cigars
-         * Return: length per string
-         */
-        int32_t length = 0;
-        for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
-            CigarOperation op = d_clipped_cigar[d_clipped_cigar_start[idx] + i];
-            // We can comment out this
-            if (CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] > 0) {
-                length += static_cast<int32_t>(CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] * op.Length);
-            }
-        }
-
-        int64_t end = d_pos[idx] + length - 1;
-
-        int64_t sftEnd = end;
-        {
-            bool saw_nonHS = false;
-            auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
-
-            for (int64_t i = static_cast<int64_t>(d_clipped_cigar_len[idx]) - 1; i >= 0; i--) {
+         int64_t sftStart = 0;
+         {
+             auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
+             auto start = d_pos[idx];
+             for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
                  CigarOperation op = cigar[i];
                  if (op.Operation == 'S') {
-                     sftEnd += static_cast<int32_t>(op.Length);
+                     start -= op.Length;
                  } else if (op.Operation != 'H') {
-                     //return softEnd;
-                     saw_nonHS = true;
                      break;
                  }
              }
-            if (!saw_nonHS) {
-                sftEnd = end;
-            }
-        }
-        if (d_known_site_ptr[d_rname[idx]].len > 0) {
-            SpanField cigar_ptr(d_clipped_cigar_start[idx], d_clipped_cigar_len[idx]);
-            calculateSkipSlice(d_sequences, d_sequences_ptr[idx], d_qualities, d_sequences_ptr[idx]/*d_qualities_ptr[idx]*/,
-                               d_clipped_cigar, cigar_ptr, d_pos[idx], sftStart, sftEnd,
-                               d_known_site, d_known_site_ptr[d_rname[idx]],
-                               d_skip_slice + d_sequences_ptr[idx].start/*d_skip_slice_ptr[idx].start*/);
-        }
-    });
-    batch->_q_process.wait_and_throw();
-    Logger::getLogger().log(LOG_DEBUG, "        [ComputeSkipSliceVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-    profile.stop(StageId::ComputeSkipVector);
+             sftStart = static_cast<int32_t>(start);
+         }
 
-    profile.start(StageId::ComputeSNPSVector);
-    t2.reset();
-    {
-        batch->_q_process.parallel_for<class ComputeSNPSVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+         /*
+          * Reduce by segment
+          * Segments: cigars
+          * Return: length per string
+          */
+         int32_t length = 0;
+         for (size_t i = 0; i < d_clipped_cigar_len[idx]; i++) {
+             CigarOperation op = d_clipped_cigar[d_clipped_cigar_start[idx] + i];
+             // We can comment out this
+             if (CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] > 0) {
+                 length += static_cast<int32_t>(CigarOperatorConsumesReferenceBases[static_cast<uint8_t>(op.Operation)] * op.Length);
+             }
+         }
 
-            if (!d_recalibrated[idx]) {
-                return;
-            }
-            if (d_sequences_ptr[idx].len == 0) {
-                return;
-            }
+         int64_t end = d_pos[idx] + length - 1;
 
-            computeSnpEvents(d_sequences, d_sequences_ptr[idx], d_pos[idx],
-                             d_clipped_cigar, d_clipped_cigar_start[idx], d_clipped_cigar_len[idx], d_reference, d_reference_ptr[d_rname[idx]],
-                            d_snps + d_sequences_ptr[idx].start/*d_snps_ptr[idx].start*/);
-    });
-        batch->_q_process.wait_and_throw();
-    }
+         int64_t sftEnd = end;
+         {
+             bool saw_nonHS = false;
+             auto cigar = d_clipped_cigar + d_clipped_cigar_start[idx];
 
-    Logger::getLogger().log(LOG_DEBUG, "        [ComputeSNPSVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-    profile.stop(StageId::ComputeSNPSVector);
+             for (int64_t i = static_cast<int64_t>(d_clipped_cigar_len[idx]) - 1; i >= 0; i--) {
+                  CigarOperation op = cigar[i];
+                  if (op.Operation == 'S') {
+                      sftEnd += static_cast<int32_t>(op.Length);
+                  } else if (op.Operation != 'H') {
+                      //return softEnd;
+                      saw_nonHS = true;
+                      break;
+                  }
+              }
+             if (!saw_nonHS) {
+                 sftEnd = end;
+             }
+         }
+         if (d_known_site_ptr[d_rname[idx]].len > 0) {
+             SpanField cigar_ptr(d_clipped_cigar_start[idx], d_clipped_cigar_len[idx]);
+             calculateSkipSlice(d_sequences, d_sequences_ptr[idx], d_qualities, d_sequences_ptr[idx]/*d_qualities_ptr[idx]*/,
+                                d_clipped_cigar, cigar_ptr, d_pos[idx], sftStart, sftEnd,
+                                d_known_site, d_known_site_ptr[d_rname[idx]],
+                                d_skip_slice + d_sequences_ptr[idx].start/*d_skip_slice_ptr[idx].start*/);
+         }
+     });
+     batch->_q_process.wait_and_throw();
+     Logger::getLogger().log(LOG_DEBUG, "        [ComputeSkipSliceVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+     profile.stop(StageId::ComputeSkipVector);
 
-    profile.start(StageId::ComputeContextVector);
-    t2.reset();
+     profile.start(StageId::ComputeSNPSVector);
+     t2.reset();
+     {
+         batch->_q_process.parallel_for<class ComputeSNPSVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
 
-    batch->_q_process.parallel_for<class ComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
+             if (!d_recalibrated[idx]) {
+                 return;
+             }
+             if (d_sequences_ptr[idx].len == 0) {
+                 return;
+             }
 
-        if (!d_recalibrated[idx]) {
-            return;
-        }
-        if (d_sequences_ptr[idx].len == 0) {
-            return;
-        }
+             computeSnpEvents(d_sequences, d_sequences_ptr[idx], d_pos[idx],
+                              d_clipped_cigar, d_clipped_cigar_start[idx], d_clipped_cigar_len[idx], d_reference, d_reference_ptr[d_rname[idx]],
+                             d_snps + d_sequences_ptr[idx].start/*d_snps_ptr[idx].start*/);
+     });
+         batch->_q_process.wait_and_throw();
+     }
 
-        bool is_reversed = SamAlignments::IsReversed(d_flag[idx]);
-        computeStrandedClippedSeq(d_sequences, d_sequences_ptr[idx], d_qualities, d_sequences_ptr[idx]/*d_qualities_ptr[idx]*/,
-                                  is_reversed, d_stranded_seq, d_stranded_seq_ptr[idx]);
-        computeBaseContextCovariate(is_reversed, d_stranded_seq, d_stranded_seq_ptr[idx],
-                                    d_base_context + d_base_context_ptr[idx].start,
-                                    d_base_context_ptr[idx].len);
-    });
-    batch->_q_process.wait_and_throw();
+     Logger::getLogger().log(LOG_DEBUG, "        [ComputeSNPSVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+     profile.stop(StageId::ComputeSNPSVector);
 
-    Logger::getLogger().log(LOG_DEBUG, "        [ComputeContextKeysVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-    profile.stop(StageId::ComputeContextVector);
+     profile.start(StageId::ComputeContextVector);
+     t2.reset();
 
-    Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateVectors kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+     batch->_q_process.parallel_for<class ComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
 
-    profile.start(StageId::UpdateIndexes);
-    profile.start(StageId::Preprocessing);
+         if (!d_recalibrated[idx]) {
+             return;
+         }
+         if (d_sequences_ptr[idx].len == 0) {
+             return;
+         }
 
-    t.reset();
-    {
-        /*enum { nt = 256, vt = 1, vt0 = 5, nv = nt*vt };
-        uint32_t num_ctas = div_up(batch->_d_data.table_sz, size_t(nv));
+         bool is_reversed = SamAlignments::IsReversed(d_flag[idx]);
+         computeStrandedClippedSeq(d_sequences, d_sequences_ptr[idx], d_qualities, d_sequences_ptr[idx]/*d_qualities_ptr[idx]*/,
+                                   is_reversed, d_stranded_seq, d_stranded_seq_ptr[idx]);
+         computeBaseContextCovariate(is_reversed, d_stranded_seq, d_stranded_seq_ptr[idx],
+                                     d_base_context + d_base_context_ptr[idx].start,
+                                     d_base_context_ptr[idx].len);
+     });
+     batch->_q_process.wait_and_throw();
 
-        batch->_q_process.parallel_for<class SetDefaultValues>(
-                sycl::nd_range<1>(sycl::range<1>(num_ctas * nt),
-                sycl::range<1>(nt)),
-                [=, count = batch->_d_data.table_sz](sycl::nd_item<1> item) {
+     Logger::getLogger().log(LOG_DEBUG, "        [ComputeContextKeysVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
+     profile.stop(StageId::ComputeContextVector);
 
-                    int tid = item.get_local_id(); // Current work-item index
-                    int group_id = item.get_group(0); // Workgroup index
-                    size_t global_base = group_id * vt * nt; // Global offset for this workgroup
+     Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateVectors kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_quality_table_indexes[global_base + j] = INVALID_INDEX;
-                    }, tid, count);
+     profile.start(StageId::UpdateIndexes);
+     profile.start(StageId::Preprocessing);
 
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_cycle_table_indexes[global_base + j] = INVALID_INDEX;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_context_table_indexes[global_base + j] = INVALID_INDEX;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_quality_table_vals[global_base + j] = 0;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_cycle_table_vals[global_base + j] = 0;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_context_table_vals[global_base + j] = 0;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_segments_quality[global_base + j] = 0;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_segments_cycle[global_base + j] = 0;
-                    }, tid, count);
-
-                    strided_iterate<nt, vt>([&](int i, int j) {
-                        d_segments_context[global_base + j] = 0;
-                    }, tid, count);
-        });
-    }*/
+     t.reset();
+     {
 
         const size_t n = batch->_d_data.table_sz;
 
@@ -683,32 +634,32 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
         });
     }
     batch->_q_process.wait_and_throw();
-    Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateTableIndexes kernel] Time: " + std::to_string(t.elapsed()) + " sec");
+     Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateTableIndexes kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-    profile.stop(StageId::EmitIndexes);
+     profile.stop(StageId::EmitIndexes);
 
-    profile.start(StageId::AggregateQual);
-    aggregate_quality(batch->_q_process,
-                  d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz,
-                  d_quality_table, d_quality_table_sz);
-    batch->_q_process.wait_and_throw();
-    profile.stop(StageId::AggregateQual);
+     profile.start(StageId::AggregateQual);
+     aggregate_quality(batch->_q_process,
+                   d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz,
+                   d_quality_table, d_quality_table_sz);
+     batch->_q_process.wait_and_throw();
+     profile.stop(StageId::AggregateQual);
 
-    profile.start(StageId::AggregateCycle);
-    aggregate_cycle(batch->_q_process,
-                    d_cycle_table_indexes, d_cycle_table_vals, batch->_d_data.table_sz,
-                    d_cycle_table, d_cycle_table_sz);
-    batch->_q_process.wait_and_throw();
-    profile.stop(StageId::AggregateCycle);
+     profile.start(StageId::AggregateCycle);
+     aggregate_cycle(batch->_q_process,
+                     d_cycle_table_indexes, d_cycle_table_vals, batch->_d_data.table_sz,
+                     d_cycle_table, d_cycle_table_sz);
+     batch->_q_process.wait_and_throw();
+     profile.stop(StageId::AggregateCycle);
 
-    profile.start(StageId::AggregateContext);
-    aggregate_context(batch->_q_process,
-                      d_context_table_indexes, d_context_table_vals, batch->_d_data.table_sz,
-                      d_context_table, d_context_table_sz);
+     profile.start(StageId::AggregateContext);
+     aggregate_context(batch->_q_process,
+                       d_context_table_indexes, d_context_table_vals, batch->_d_data.table_sz,
+                       d_context_table, d_context_table_sz);
 
-    batch->_q_process.wait_and_throw();
-    profile.stop(StageId::AggregateContext);
+     batch->_q_process.wait_and_throw();
+     profile.stop(StageId::AggregateContext);
 
-    Logger::getLogger().log(LOG_DEBUG, "    [Tables updates] Time: " + std::to_string(t.elapsed()) + " sec");
-    profile.stop(StageId::UpdateIndexes);
+     Logger::getLogger().log(LOG_DEBUG, "    [Tables updates] Time: " + std::to_string(t.elapsed()) + " sec");
+     profile.stop(StageId::UpdateIndexes);
 }

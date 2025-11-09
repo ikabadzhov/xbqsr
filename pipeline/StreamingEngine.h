@@ -109,7 +109,7 @@ public:
                         auto item = chan_.pop();
                         if (!item) break;  // closed & drained
                         Batch& batch = *item;
-                        auto batch_t0 = clock::now();
+                        //auto batch_t0 = clock::now();
                         for (auto& s : stages_) {
                             const auto t0 = clock::now();
                             s.fn(batch);

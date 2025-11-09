@@ -14,7 +14,7 @@ void SamAlignmentParser::ParseSamAlignmentFromSlice(std::string_view s, SamAlign
 void SamAlignmentParser::ParseSamAlignment(StringScanner &sc, SamAlignments &reads, size_t idx) {
     std::string value;
     sc.doString(value);
-    size_t qnameMappedIdx = reads.GetHdr().QnameMapper().addString(value);
+    //size_t qnameMappedIdx = reads.GetHdr().QnameMapper().addString(value);
     //reads.QNAME[idx] = qnameMappedIdx;
     //reads.TILE[idx] = computeTileInfo(value);
 

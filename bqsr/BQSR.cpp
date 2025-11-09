@@ -37,7 +37,7 @@ int32_t fastRound(double d) {
     return (d > 0.0) ? static_cast<int>(d + 0.5) : static_cast<int>(d - 0.5);
 }
 
-int32_t keyFromContext(char* dna, SpanField dnaPtrs, int64_t start, int64_t end) {
+SYCL_EXTERNAL int32_t keyFromContext(char* dna, SpanField dnaPtrs, int64_t start, int64_t end) {
     auto key = static_cast<int32_t>(end - start);
 
     uint32_t bitOffset = LENGTH_BITS;
@@ -58,7 +58,8 @@ void contextWith(char* bases, SpanField basesPtrs, int32_t contextSize, int32_t*
     size_t readLength = basesPtrs.len;
 
     int32_t fillCount = std::min(contextSize - 1, static_cast<int32_t>(readLength));
-    std::fill_n(keys, fillCount, -1);
+    //std::fill_n(keys, fillCount, -1);
+    std::fill(keys, keys + fillCount, -1);
     size_t keyVectorIdx = fillCount;
 
     if (readLength < contextSize) {
@@ -112,10 +113,10 @@ void contextWith(char* bases, SpanField basesPtrs, int32_t contextSize, int32_t*
     bases = tmp_bases;
     tmp_bases = nullptr;
 }
-//TODO: FIx MISMATCHED_COTEXT_SIZE
+//TODO: FIX MISMATCHED_COTEXT_SIZE
 void computeBaseContextCovariate(bool isReversed, char* strandedClippedSeq, SpanField& strandedClippedSeqPtrs, int32_t* keys, uint16_t& keyLength) {
     contextWith(strandedClippedSeq, strandedClippedSeqPtrs, MISMATCHES_CONTEXT_SIZE, keys, keyLength);
-    assert(keyLength <= strandedClippedSeqPtrs.len);
+    //assert(keyLength <= strandedClippedSeqPtrs.len);
     if (isReversed){
         std::reverse(keys, keys + keyLength);
     }
@@ -391,7 +392,7 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     profiler.stop(StageId::RecalibrateBatches);
 
     Logger::getLogger().log(LOG_INFO, "Total time recalibrate: " + std::to_string(timerAll.elapsed()) + "sec");
-    //profiler.report();
+    profiler.report();
 }
 
 BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& knownSites,
@@ -426,9 +427,9 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& kno
              knownSites.getIntervalsPtrs().size() * sizeof(SpanFieldLong));
 
     Logger::getLogger().log(LOG_INFO, "Time to flatten fasta and intervals: " + std::to_string(t.elapsed()));
-    this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.qualityScores().size(), q_, memory_space_t::memory_space_shared);
-    this->tables_context = mem_t<bqsrEntry>(recalibration_tables.contexts().size(), q_, memory_space_t::memory_space_shared);
-    this->tables_cycle = mem_t<bqsrEntry>(recalibration_tables.cycles().size(), q_, memory_space_t::memory_space_shared);
+    this->tables_quality = mem_t<bqsrEntry>(recalibration_tables.qualityScores().size(), q_, memory_space_t::memory_space_device);
+    this->tables_context = mem_t<bqsrEntry>(recalibration_tables.contexts().size(), q_, memory_space_t::memory_space_device);
+    this->tables_cycle = mem_t<bqsrEntry>(recalibration_tables.cycles().size(), q_, memory_space_t::memory_space_device);
 
 
     bqsrEntry defaultEntry;
@@ -444,9 +445,9 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& kno
 
 //[[clang::optnone]]
 void BaseRecalibrator::exportTables(BaseRecalibratorTables &recalibration_tables) {
-    memcpy(recalibration_tables.qualityScores().table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.qualityScores().size());
-    memcpy(recalibration_tables.cycles().table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.cycles().size());
-    memcpy(recalibration_tables.contexts().table.data(), tables_context.data(), sizeof(bqsrEntry)*recalibration_tables.contexts().size());
+    tables_quality.context().memcpy(recalibration_tables.qualityScores().table.data(), tables_quality.data(), sizeof(bqsrEntry)*recalibration_tables.qualityScores().size());
+    tables_cycle.context().memcpy(recalibration_tables.cycles().table.data(), tables_cycle.data(), sizeof(bqsrEntry)*recalibration_tables.cycles().size());
+    tables_context.context().memcpy(recalibration_tables.contexts().table.data(), tables_context.data(), sizeof(bqsrEntry)*recalibration_tables.contexts().size());
 }
 
 void BaseRecalibrator::mergeTables(BaseRecalibratorTables &recalibration_tables) {

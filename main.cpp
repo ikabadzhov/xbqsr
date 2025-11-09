@@ -72,16 +72,26 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    gpus.resize(n_gpus);
+    //gpus.resize(n_gpus);
 
-    Logger::getLogger().log(LOG_INFO, "Running on ", gpus.size(), " GPU devices:");
+    Logger::getLogger().log(LOG_INFO, "Devices availables:");
     for (size_t i = 0; i < gpus.size(); ++i) {
         Logger::getLogger().log(LOG_INFO, "  [", i, "] ",
             gpus[i].get_info<sycl::info::device::name>(), " (",
             gpus[i].get_info<sycl::info::device::vendor>(), ")");
     }
 
+    int selected_dev = 3;
+
+    Logger::getLogger().log(LOG_INFO, "Selected device:");
+    Logger::getLogger().log(LOG_INFO, "  [", selected_dev, "] ",
+            gpus[selected_dev].get_info<sycl::info::device::name>(), " (",
+            gpus[selected_dev].get_info<sycl::info::device::vendor>(), ")");
+
+    gpus[0] = gpus[selected_dev];
+
     sycl::device device = gpus[0];
+
     sycl::queue queue(device);
     /**** Input parsing for reading Alignment Data *****/
 

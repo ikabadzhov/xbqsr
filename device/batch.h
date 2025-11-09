@@ -135,7 +135,7 @@ void batch_processing_variable_length(sycl::queue &queue, input_data_t& input, o
 
     // --------------- main pipeline ---------------
     bool   first_batch = true;
-    int32_t ith_batch  = 0;
+    //int32_t ith_batch  = 0;
 
     while (first_batch || batch_process->_n != 0) {
         // kick the loader to fetch the NEXT batch into batch_transfer
@@ -168,7 +168,7 @@ void batch_processing_variable_length(sycl::queue &queue, input_data_t& input, o
         //batch_transfer->_max_num_elements = tmp_max;
 
         first_batch = false;
-        ++ith_batch;
+        //++ith_batch;
     }
 
     // graceful shutdown of loader

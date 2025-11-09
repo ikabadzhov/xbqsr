@@ -254,7 +254,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
     } else {
         // Save the raw tag blob
         const size_t arena_off = opt.tagArena.size();
-        /*opt.tagArena.insert(opt.tagArena.end(),
+        *//*opt.tagArena.insert(opt.tagArena.end(),
                             reinterpret_cast<const std::byte*>(bytes.data() + aux_off),
                             reinterpret_cast<const std::byte*>(bytes.data() + aux_off + aux_size));*//*
         opt.tagsBlobOff[idx]  = arena_off;

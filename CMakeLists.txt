@@ -14,36 +14,24 @@ set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -O2")
 
-# ------------------------------------------------------------------------------
-# SYCL multi-backend configuration (fat binary)
-# ------------------------------------------------------------------------------
+# --- oneAPI SYCL multi-backend flags ---
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
+    -fsycl \
+    -fsycl-targets=spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa \
+    -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89 \
+    -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a \
+    -Wall")
 
-# Targets:
-#  - spir64:      CPU + Intel GPUs (Level Zero/OpenCL)
-#  - nvptx64-...: NVIDIA GPUs (CUDA backend)
-#  - amdgcn-... : AMD GPUs (HIP backend)
-#
-# Adjust offload arch values to match your actual hardware:
-#  - sm_89   : NVIDIA L40S / Ada
-#  - gfx90a  : AMD MI210
-#
-set(SYCL_TARGETS "spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
+ #   -fsycl \
+  #  -fsycl-targets=spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa \
+   # -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89 \
+   # -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a \
+    #-Wall")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=${SYCL_TARGETS} -Wall")
-
-# Per-backend arch flags
-# (CMake treats them as separate arguments; ok to append here)
-set(CMAKE_CXX_FLAGS
-		"${CMAKE_CXX_FLAGS}
-     -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89
-     -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a"
-)
-
-# oneAPI toolchain usually links SYCL/OpenCL automatically via icpx,
-# but if your environment needs explicit libs you can keep these:
-set(CMAKE_EXE_LINKER_FLAGS
-		"${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl"
-)
+#set(CMAKE_EXE_LINKER_FLAGS
+#		"${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl"
+#)
 
 # ------------------------------------------------------------------------------
 # Dependencies

@@ -31,7 +31,7 @@ mem_t<int> merge_path_partitions(a_keys_it a, int64_t a_count, b_keys_it b, int6
 template<bounds_t bounds, typename a_keys_it, typename b_keys_it, typename comp_t>
 mem_t<size_t> merge_path_partitions_long(a_keys_it a, int64_t a_count, b_keys_it b, int64_t b_count, int64_t spacing, comp_t comp, sycl::queue& q) {
 
-    typedef typename std::iterator_traits<a_keys_it>::value_type int_t;
+    //typedef typename std::iterator_traits<a_keys_it>::value_type int_t;
     int num_partitions = (int)div_up(a_count + b_count, spacing) + 1;
     mem_t<size_t> mem(num_partitions, q);
     size_t* p = mem.data();

@@ -361,6 +361,9 @@ ssize_t BamReader::ParseAlignment(std::vector<SamAlignments>& reads, std::shared
     auto batch_transfer = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
 
     Carry carry;
+    carry.bin.reserve(4096);
+    carry.bin_tmp.reserve(4096);
+
     size_t alnsRead    = 0;
     size_t batchIdx    = 0;
     bool   first_batch = true;
@@ -470,6 +473,8 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header,
     auto batch_transfer = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
 
     Carry carry;
+    carry.bin.reserve(4096);
+
     size_t alnsRead    = 0;
     bool   first_batch = true;
 

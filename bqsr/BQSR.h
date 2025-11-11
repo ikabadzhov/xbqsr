@@ -28,6 +28,8 @@ public:
     mem_t<bqsrEntry> tables_cycle;
     mem_t<bqsrEntry> tables_context;
 
+    size_t constant_allocation_;
+
     explicit BaseRecalibrator(MappedFasta &referenceGenome, KnownSites &knownSites,
                               sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
     void exportTables(BaseRecalibratorTables& recalibration_tables);

@@ -139,6 +139,10 @@ SequenceDictionary &Header::getSequenceDictionary() {
     return sequenceDictionary;
 }
 
+const SequenceDictionary & Header::getSequenceDictionary() const noexcept {
+    return sequenceDictionary;
+}
+
 void Header::buildReadGroupCovariateIndex() {
     std::unique_lock lk(mtx);
 

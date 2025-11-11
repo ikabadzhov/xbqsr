@@ -2,8 +2,11 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <vector>
+
 #include "SamHeaderRecord.h"
 #include "../../data_types/StringDictionary.h"
+#include "../../data_types/TransparentStringTypes.h"
 
 
 class ReadGroupRecord : public SamHeaderRecord {
@@ -16,6 +19,7 @@ public:
 class ReadGroupsDictionary {
     std::vector<ReadGroupRecord>         readGroups;
     std::unordered_map<std::string, int> stringToId;
+    //std::vector<std::pair<std::string, int>> stringToId;
     std::vector<std::string>             idToString;
 
     // Encoded PU dictionary and RG->PU mapping
@@ -33,6 +37,7 @@ public:
 
     int32_t add(const ReadGroupRecord& readGroup);
     int32_t getId(const std::string& str) const;
+    int32_t getId(std::string_view str) const;
 
     const std::string&      getString(int32_t id) const;
     const ReadGroupRecord&  getReadGroupRecord(int32_t id) const;

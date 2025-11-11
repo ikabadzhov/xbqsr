@@ -197,6 +197,8 @@ add_executable(bqsr
 		pipeline/StreamingChannel.h
 		pipeline/StreamingEngine.h
 		data_types/StringDictionary.h
+		data_types/FlatHashMap.h
+		data_types/TransparentStringTypes.h
 )
 
 # ------------------------------------------------------------------------------

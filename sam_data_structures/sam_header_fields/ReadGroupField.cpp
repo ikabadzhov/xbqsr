@@ -26,11 +26,34 @@ int32_t ReadGroupsDictionary::add(const ReadGroupRecord& rg) {
 }
 
 int32_t ReadGroupsDictionary::getId(const std::string& s) const {
+    /*if (s.empty()) return EMPTY_STRING;
+    for (int32_t i = 0; i < idToString.size(); ++i) {
+        if (idToString[i] == s) {
+            return i;
+        }
+    }
+    return STRING_NOT_FOUND;*/
     if (s.empty()) return EMPTY_STRING;
     if (auto it = stringToId.find(s); it != stringToId.end())
         return it->second;
     return STRING_NOT_FOUND;
 }
+
+int32_t ReadGroupsDictionary::getId(std::string_view s) const {
+   /* if (s.empty()) return EMPTY_STRING;
+    for (int32_t i = 0; i < idToString.size(); ++i) {
+        if (static_cast<std::string_view>(idToString[i]) == s) {
+            return i;
+        }
+    }
+    return STRING_NOT_FOUND;*/
+    /*
+    if (s.empty()) return EMPTY_STRING;
+    if (auto it = stringToId.find(s); it != stringToId.end())
+        return it->second;
+    return STRING_NOT_FOUND;*/
+}
+
 
 const std::string& ReadGroupsDictionary::getString(int32_t id) const {
     if (id < 0 || static_cast<size_t>(id) >= idToString.size())

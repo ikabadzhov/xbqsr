@@ -119,10 +119,10 @@ int main(int argc, char **argv) {
     std::shared_ptr<BaseRecalibrator> bqsrRecal;
 
     // Stage 0: AddREFID filter
-    stages.emplace_back("AddREFID", [](SamAlignments& batch){
+    /*stages.emplace_back("AddREFID", [](SamAlignments& batch){
         auto addREFID = Filter::AddREFID(batch);
         for (size_t i = 0; i < batch.GetAlnsNum(); ++i) addREFID(batch, i);
-    });
+    });*/
 
     if (args.is_recalibrate()) {
         referenceGenome = std::make_unique<MappedFasta>(args.reference, header);

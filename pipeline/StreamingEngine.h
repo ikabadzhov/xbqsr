@@ -73,7 +73,7 @@ public:
         std::jthread producer([&](std::stop_token st){
             try {
                 // Reader must call the callback once per parsed batch:
-                //   void ParseAlignmentStreamed(hdr, [&](Batch&& b){ chan_.push(std::move(b)); });
+                // void ParseAlignmentStreamed(hdr, [&](Batch&& b){ chan_.push(std::move(b)); });
                 auto t_total0 = clock::now();
                 auto t_prev   = t_total0;
 
@@ -81,7 +81,7 @@ public:
                     if (st.stop_requested()) return;
 
                     auto t_now = clock::now();
-                    auto dt    = std::chrono::duration_cast<std::chrono::nanoseconds>(t_now - t_prev).count();
+                    auto dt= std::chrono::duration_cast<std::chrono::nanoseconds>(t_now - t_prev).count();
 
                     producer_ns_total += dt; //.fetch_add(dt, std::memory_order_relaxed);
                     producer_ns_last += dt; //.store(dt, std::memory_order_relaxed);

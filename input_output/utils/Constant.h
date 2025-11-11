@@ -1,7 +1,3 @@
-//
-// Created by lorenzo on 3/11/24.
-//
-
 #ifndef GENOMICPIPELINE_CONSTANT_H
 #define GENOMICPIPELINE_CONSTANT_H
 

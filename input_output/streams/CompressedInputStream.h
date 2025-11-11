@@ -42,7 +42,7 @@ class CompressedInputStream : public InputStream {
 
     gzFile fileDescriptor;
     std::string path;
-    z_stream strm{};
+    //z_stream strm{};
 
     static bool isValidBlockHeader(std::string& buffer);
 
@@ -108,11 +108,11 @@ private:
     std::vector<std::array<uint8_t, BGZF_BLOCK_SIZE>> comp_pool;
 
     // Inflaters
-    z_stream zstrm_;
+    //z_stream zstrm_;
 
-#ifdef USE_LIBDEFLATE
+
     libdeflate_decompressor* decomp_ = nullptr;
-#endif
+
 };
 
 

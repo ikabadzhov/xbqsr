@@ -121,6 +121,7 @@ public:
     const ReadGroupsDictionary& getReadGroupRecord() const noexcept;
     Comments& getComments();
     SequenceDictionary& getSequenceDictionary();
+    const SequenceDictionary& getSequenceDictionary() const noexcept;
 
     void buildReadGroupCovariateIndex();
 

@@ -69,29 +69,70 @@ uint32_t pack_cigar(uint32_t len, char op) {
     }
     return (len << 4) | (code & 0xF);
 }
+
 inline uint8_t base_code(char b) {
-    switch (b) {
-        case '=': return 0;
-        case 'A': case 'a': return 1;
-        case 'C': case 'c': return 2;
-        case 'G': case 'g': return 4;
-        case 'T': case 't': return 8;
-        default: return 15; // N/unknown
+    // compile-time table; all entries default to 15
+    static constexpr std::array<uint8_t, 256> LUT = []{
+        std::array<uint8_t,256> a{};
+        a.fill(15);
+        a[static_cast<unsigned char>('=')] = 0;
+        a[static_cast<unsigned char>('A')] = 1; a[static_cast<unsigned char>('a')] = 1;
+        a[static_cast<unsigned char>('C')] = 2; a[static_cast<unsigned char>('c')] = 2;
+        a[static_cast<unsigned char>('G')] = 4; a[static_cast<unsigned char>('g')] = 4;
+        a[static_cast<unsigned char>('T')] = 8; a[static_cast<unsigned char>('t')] = 8;
+        return a;
+    }();
+
+    return LUT[static_cast<unsigned char>(b)];
+}
+
+inline void paq_seq_unrolled8(const char* s, int l, uint8_t* out) {
+    int i = 0;
+    int o = 0; // byte index into out
+
+    // Process 8 bases (4 bytes) per iteration
+    for (; i + 7 < l; i += 8, o += 4) {
+        const uint8_t b0 = base_code(s[i + 0]);
+        const uint8_t b1 = base_code(s[i + 1]);
+        const uint8_t b2 = base_code(s[i + 2]);
+        const uint8_t b3 = base_code(s[i + 3]);
+        const uint8_t b4 = base_code(s[i + 4]);
+        const uint8_t b5 = base_code(s[i + 5]);
+        const uint8_t b6 = base_code(s[i + 6]);
+        const uint8_t b7 = base_code(s[i + 7]);
+
+        out[o + 0] = static_cast<uint8_t>((b0 << 4) | (b1 & 0x0F));
+        out[o + 1] = static_cast<uint8_t>((b2 << 4) | (b3 & 0x0F));
+        out[o + 2] = static_cast<uint8_t>((b4 << 4) | (b5 & 0x0F));
+        out[o + 3] = static_cast<uint8_t>((b6 << 4) | (b7 & 0x0F));
+    }
+
+    // Tail (0–7 remaining bases)
+    for (; i + 1 < l; i += 2, ++o) {
+        const uint8_t hi = base_code(s[i]);
+        const uint8_t lo = base_code(s[i + 1]);
+        out[o] = static_cast<uint8_t>((hi << 4) | (lo & 0x0F));
+    }
+    if (i < l) {
+        const uint8_t hi = base_code(s[i]);
+        out[o] = static_cast<uint8_t>(hi << 4);
     }
 }
 
-inline void pack_seq(const char* seq, int len, uint8_t* dst)
-{
-    for (int i = 0; i < len; ++i) {
-        const uint8_t code = base_code(seq[i]);
-        if (i & 1)
-            dst[i >> 1] = (dst[i >> 1] & 0xF0) | code;
-        else
-            dst[i >> 1] = (code << 4);
+// Packs DNA bases from s[0..l) into out[(l+1)/2] bytes.
+// Upper nibble = base i, lower nibble = base i+1.
+// If l is odd, last byte's lower nibble is left as-is (caller may zero if desired).
+inline void paq_seq(const char* s, int l, uint8_t* out) {
+    int i = 0;
+    for (; i + 1 < l; i += 2) {
+        const uint8_t hi = base_code(s[i]);
+        const uint8_t lo = base_code(s[i + 1]);
+        out[i >> 1] = static_cast<uint8_t>((hi << 4) | (lo & 0x0F));
     }
-
-    // If len is odd, last nibble (low 4 bits) remains undefined,
-    // but this is fine — BAM readers ignore it.
+    if (i < l) {
+        const uint8_t hi = base_code(s[i]);
+        out[i >> 1] = static_cast<uint8_t>(hi << 4);
+    }
 }
 
 //[[clang::optnone]]
@@ -250,7 +291,8 @@ void write_record_into(uint8_t* dst, size_t bytes_expected,
 
     // ---- SEQ (packed) ----
     if (l_seq > 0) {
-        pack_seq_bytes(reads.GetSEQ(idx).data(), l_seq, p);
+        paq_seq(reads.GetSEQ(idx).data(), l_seq, p);
+        //pack_seq_bytes(reads.GetSEQ(idx).data(), l_seq, p);
         p += (l_seq + 1) >> 1;
     }
 

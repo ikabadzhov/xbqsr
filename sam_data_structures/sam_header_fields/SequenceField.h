@@ -77,6 +77,15 @@ public:
 
     std::vector<SequenceRecord>& getAll();
     ssize_t getIdx(const std::string &sequence_name);
+
+    bool hasIndex(ssize_t idx) const {
+        return idx >= 0 && static_cast<size_t>(idx) < sequences.size();
+    }
+
+    const SequenceRecord& byIndex(ssize_t idx) const {
+        return sequences[static_cast<size_t>(idx)];
+    }
+
     const std::string& getSequenceName(ssize_t id);
 
     bool containsSequence(const std::string &sequence_name);

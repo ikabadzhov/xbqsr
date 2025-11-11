@@ -135,7 +135,7 @@ bool recalibrateAln(Header& hdr, size_t idx, uint8_t MAPQ, uint16_t FLAG, ssize_
         !isStrictUnmapped(SamAlignments::IsUnmapped(FLAG), RNAME, PNEXT) &&
         POS > 0 && len_sequence > 0 &&
         len_sequence == len_qual &&
-        !isEmptyRG && alignmentAgreesWithHeader(hdr, RNAME, POS) ) {
+        !isEmptyRG && alignmentAgreesWithHeader(hdr, RNAME, POS)) {
 
         return !cigarContainsN(cigar, cigarPtrs) && ReferenceLengthFromCigar(cigar, cigarPtrs) >= 0 &&
                len_sequence == static_cast<uint32_t>(ReadLengthFromCigar(cigar, cigarPtrs));
@@ -381,8 +381,8 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     // Set up your configuration using available device memory
     ComputeSkipSliceConfiguration config;
     //size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
-    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>();
-    config.max_memory = available_mem / 3;
+    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_allocation_;
+    config.max_memory = available_mem / 2;
 
     // Process the current batch with your kernel
     batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(q_, in, out, compute_skip_slice_kernel, config);
@@ -400,11 +400,11 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& kno
     Timer t;
     t.reset();
 
-    this->fasta = mem_t<uint8_t>(referenceGenome.getFullFasta().size(), q_, memory_space_t::memory_space_shared);
-    this->fasta_ptrs = mem_t<SpanFieldLong>(referenceGenome.getFullFastaPtrs().size(), q_, memory_space_t::memory_space_shared);
+    this->fasta = mem_t<uint8_t>(referenceGenome.getFullFasta().size(), q_, memory_space_t::memory_space_device);
+    this->fasta_ptrs = mem_t<SpanFieldLong>(referenceGenome.getFullFastaPtrs().size(), q_, memory_space_t::memory_space_device);
 
-    this->local_known_intervals = mem_t<Interval>(knownSites.getIntervals().size(), q_, memory_space_t::memory_space_shared);
-    this->local_known_intervals_ptrs = mem_t<SpanFieldLong>(knownSites.getIntervalsPtrs().size(), q_, memory_space_t::memory_space_shared);
+    this->local_known_intervals = mem_t<Interval>(knownSites.getIntervals().size(), q_, memory_space_t::memory_space_device);
+    this->local_known_intervals_ptrs = mem_t<SpanFieldLong>(knownSites.getIntervalsPtrs().size(), q_, memory_space_t::memory_space_device);
 
     // Copy FASTA bases
     q_.memcpy(this->fasta.data(),
@@ -440,6 +440,20 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& kno
     q_.fill(tables_cycle.data(), defaultEntry, recalibration_tables.cycles().size());
     q_.fill(tables_context.data(), defaultEntry, recalibration_tables.contexts().size());
     q_.wait();
+    constant_allocation_ =
+        referenceGenome.getFullFasta().size()                       * sizeof(uint8_t)       +
+        referenceGenome.getFullFastaPtrs().size()                   * sizeof(SpanFieldLong) +
+        knownSites.getIntervals().size()                            * sizeof(Interval)      +
+        knownSites.getIntervalsPtrs().size()                        * sizeof(SpanFieldLong) +
+        recalibration_tables.qualityScores().size()                 * sizeof(bqsrEntry)     +
+        recalibration_tables.contexts().size()                      * sizeof(bqsrEntry)     +
+        recalibration_tables.cycles().size()                        * sizeof(bqsrEntry)     +
+            515 * 1024 * 1024; // 512 MB as margin
+
+    Logger::getLogger().log(LOG_INFO,
+        "Total device memory allocated: " + std::to_string(constant_allocation_) +
+        " bytes (" + std::to_string(constant_allocation_ / (1024.0 * 1024.0 * 1024.0)) + " GB)");
+
     Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
 }
 

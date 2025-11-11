@@ -92,12 +92,13 @@ bool cigarContainsN(CigarOperation* cigar, SpanField& cigarPtrs) {
 }
 
 bool alignmentAgreesWithHeader(Header& hdr, int32_t rname, int32_t pos) {
-    for (auto& sq : hdr.getSequenceDictionary().getAll()) {
-        if (hdr.getSequenceDictionary().getIdx(sq.getSequenceName()) == rname) {
-            return pos <= sq.getSequenceLength();
-        }
-    }
-    return false;
+    const auto& dict = hdr.getSequenceDictionary();
+
+    if (pos <= 0) return false;            // invalid coordinate
+    if (!dict.hasIndex(rname)) return false;
+
+    const auto& sq = dict.byIndex(rname);
+    return pos <= static_cast<int32_t>(sq.getSequenceLength());
 }
 
 SYCL_EXTERNAL bool isStrictUnmapped(bool isUnmapped, int32_t rname, int32_t pos) {

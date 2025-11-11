@@ -76,9 +76,10 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
     reads.FLAG[idx]  = flag;
     reads.TLEN[idx]  = tlen;
 
-    if (!qname.empty())
+    if (!qname.empty()) {
         //reads.QNAME[idx] = reads.GetHdr().QnameMapper().addString(qname);
-    reads.TILE[idx] = computeTileInfo(qname);
+        reads.TILE[idx] = computeTileInfo(qname);
+    }
 
     reads.CIGAR.SetAt(cigarVector, idx);
     reads.SEQ.SetAt(decoded_seq, idx);
@@ -155,17 +156,20 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
     //profiler.stop(IOStageId::SAMStructUpdates);
 }
 
-void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view bytes, SamAlignments &reads, size_t idx, VariableLenFieldsVar& fieldsOff, VariableLenFieldsVar& fieldsSizes)
-{
-//    auto& profiler = ProfilerIO::instance();
-
-    // -------------------- PARSING --------------------
-    ////profiler.start(IOStageId::Parsing);
-
+void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
+    std::string_view bytes,
+    SamAlignments &reads,
+    size_t idx,
+    VariableLenFieldsVar& fieldsOff,
+    VariableLenFieldsVar& fieldsSizes
+) {
     ByteScanner bs;
     bs.reset(bytes);
 
-    // Core fixed fields
+    // --- Fixed 32-byte BAM core block ---
+    if (!bs.canRead(32))
+        throw std::runtime_error("Truncated BAM core block");
+
     int32_t  refID        = bs.readInt32();
     int32_t  pos0         = bs.readInt32();
     uint8_t  l_read_name  = bs.readByte();
@@ -178,180 +182,124 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(std::string_view 
     int32_t  next_pos0    = bs.readInt32();
     int32_t  tlen         = bs.readInt32();
 
-    // --- QNAME (do not read, just record & skip) ---
+    // --- QNAME ---
     if (!bs.canRead(l_read_name))
         throw std::runtime_error("Truncated QNAME");
 
-    fieldsOff.qname   = bs.getIndex();      // byte offset where QNAME starts
-    fieldsSizes.qname = l_read_name;        // bytes INCLUDING the trailing '\0'
+    fieldsOff.qname   = bs.getIndex();
+    fieldsSizes.qname = l_read_name;      // includes '\0'
+    bs.incrementIndex(l_read_name);
 
-    bs.incrementIndex(l_read_name);         // skip QNAME to reach CIGAR
-
-    // CIGAR (n_cigar_op 32-bit words)
-    const size_t cigar_off   = bs.getIndex();
+    // --- CIGAR ---
     const size_t cigar_bytes = size_t(n_cigar_op) * sizeof(uint32_t);
-    if (!bs.canRead(cigar_bytes)) throw std::runtime_error("Truncated CIGAR");
-    fieldsOff.cigar   = cigar_off;      // byte offset within this record
-    fieldsSizes.cigar = n_cigar_op;     // number of ops (not bytes)
+    if (!bs.canRead(cigar_bytes))
+        throw std::runtime_error("Truncated CIGAR");
+
+    fieldsOff.cigar   = bs.getIndex();
+    fieldsSizes.cigar = n_cigar_op;       // in ops
     bs.incrementIndex(cigar_bytes);
 
-    // SEQ (ceil(l_seq/2) bytes)
+    // --- SEQ ---
     const size_t seq_bytes = (size_t(l_seq) + 1u) >> 1;
-    const size_t seq_off   = bs.getIndex();
-    if (!bs.canRead(seq_bytes)) throw std::runtime_error("Truncated SEQ");
-    fieldsOff.seq = seq_off;       // byte offset of packed sequence
-    fieldsSizes.seq = l_seq;         // number of bases after decode
+    if (!bs.canRead(seq_bytes))
+        throw std::runtime_error("Truncated SEQ");
+
+    fieldsOff.seq   = bs.getIndex();
+    fieldsSizes.seq = l_seq;              // in bases
     bs.incrementIndex(seq_bytes);
 
-    // QUAL (l_seq bytes)
-    const size_t qual_off = bs.getIndex();
-    if (!bs.canRead(size_t(l_seq))) throw std::runtime_error("Truncated QUAL");
-    fieldsOff.qual   = qual_off;        // byte offset of qualities
-    fieldsSizes.qual   = l_seq;           // number of qualities
+    // --- QUAL ---
+    if (!bs.canRead(size_t(l_seq)))
+        throw std::runtime_error("Truncated QUAL");
+
+    fieldsOff.qual   = bs.getIndex();
+    fieldsSizes.qual = l_seq;
     bs.incrementIndex(size_t(l_seq));
 
-    // (optional) AUX start/len for raw-tag handling:
+    // --- AUX (whatever's left) ---
+    const size_t aux_off  = bs.getIndex();
+    const size_t aux_size = bytes.size() - aux_off;
 
-    const size_t aux_off  = static_cast<size_t>(bs.getIndex());
-    const size_t aux_size = static_cast<size_t>(bytes.size()) - aux_off;
+    fieldsOff.aux   = aux_off;
+    fieldsSizes.aux = aux_size;
 
-    fieldsOff.aux = aux_off;
-    fieldsSizes.aux = aux_size; // safe since we validated earlier fields
+    // --- Store into SoA ---
 
+    reads.RNAME[idx] = (refID < 0)
+        ? SequenceRecord::RESERVED_SEQUENCE_NAMES['*']
+        : refID;
 
-    //profiler.stop(IOStageId::Parsing);
+    if (next_refID < 0)
+        next_refID = SequenceRecord::RESERVED_SEQUENCE_NAMES['*'];
 
-    // ---------------- SAM STRUCT UPDATES + TAG HANDLING ----------------
-    //profiler.start(IOStageId::SAMStructUpdates);
-
-    // Simple SoA fields
-    reads.RNAME[idx] = (refID < 0) ? SequenceRecord::RESERVED_SEQUENCE_NAMES['*'] : refID;
-    if (next_refID < 0) next_refID = SequenceRecord::RESERVED_SEQUENCE_NAMES['*'];
     reads.RNEXT[idx] = next_refID;
-
     reads.POS[idx]   = pos0 + 1;
     reads.PNEXT[idx] = next_pos0 + 1;
     reads.MAPQ[idx]  = mapq;
     reads.FLAG[idx]  = flag;
     reads.TLEN[idx]  = tlen;
-
-    // ---- Optional fields (RAW TAG BLOB + RG extraction) ----
-    // Adjust this to how you access your OptionalFields storage.
-    //OptionalFields& opt = reads.TAGS;  // <--- rename to your actual handle
-
-    // ensure capacity (if you don't pre-size externally)
-   /* if (opt.tagsBlobOff.size() <= idx) {
-        opt.tagsBlobOff.resize(idx + 1, size_t{std::numeric_limits<size_t>::max()});
-        opt.tagsBlobSize.resize(idx + 1, 0);
-        // RG column should already be sized outside; otherwise:
-        opt.RG.Resize(idx + 1);
-    }*/
-
-    /*if (aux_size == 0) {
-        // No tags
-        opt.tagsBlobOff[idx]  = std::numeric_limits<size_t>::max();
-        opt.tagsBlobSize[idx] = 0;
-    } else {
-        // Save the raw tag blob
-        const size_t arena_off = opt.tagArena.size();
-        *//*opt.tagArena.insert(opt.tagArena.end(),
-                            reinterpret_cast<const std::byte*>(bytes.data() + aux_off),
-                            reinterpret_cast<const std::byte*>(bytes.data() + aux_off + aux_size));*//*
-        opt.tagsBlobOff[idx]  = arena_off;
-        opt.tagsBlobSize[idx] = aux_size;
-
-        // Extract only RG (Z) from the just-copied blob
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(opt.tagArena.data()) + arena_off;
-        const uint8_t* e = p + aux_size;
-
-        auto skip_payload = [](const uint8_t* q, const uint8_t* e, char T) -> const uint8_t* {
-            switch (T) {
-                case 'A': case 'c': case 'C': return q + 1;
-                case 's': case 'S':           return q + 2;
-                case 'i': case 'I': case 'f': return q + 4;
-                case 'Z': case 'H': {
-                    // NUL-terminated
-                    const uint8_t* r = q;
-                    while (r < e && *r != 0) ++r;
-                    return (r < e) ? (r + 1) : e; // include NUL if present
-                }
-                case 'B': {
-                    if (q + 5 > e) return e;   // subtype + count
-                    const char subtype = char(*q++);
-                    (void)subtype;
-                    int32_t count = 0;
-                    std::memcpy(&count, q, 4); q += 4;
-                    size_t elem = 0;
-                    switch (subtype) {
-                        case 'c': case 'C': elem = 1; break;
-                        case 's': case 'S': elem = 2; break;
-                        default:            elem = 4; break; // i,I,f
-                    }
-                    size_t bytes = size_t(count) * elem;
-                    return (q + bytes <= e) ? (q + bytes) : e;
-                }
-                default: return e; // unknown → bail to end to avoid desync
-            }
-        };
-
-        // scan for RG:Z
-        while (p + 3 <= e) {
-            const char k1 = char(p[0]);
-            const char k2 = char(p[1]);
-            p += 2;
-            const char T  = char(*p++);
-            if (k1 == 'R' && k2 == 'G') {
-                if (T == 'Z') {
-                    // Grab the Z string (without the trailing NUL)
-                    const uint8_t* z = p;
-                    while (z < e && *z != 0) ++z;
-                    const size_t len = (z <= e) ? size_t(z - p) : size_t(0);
-
-                    // Store RG as compressed/interned string (your CompressedStringCollection)
-                    // I assume SetAt takes (std::string_view, idx). Adjust to your API:
-                    //opt.RG.Set(idx, {reinterpret_cast<const char*>(p), len});
-
-                    // Skip the Z payload (including NUL if it exists)
-                    p = (z < e) ? (z + 1) : e;
-                    // You can break here if you assume at most one RG per record
-                    break;
-                } else {
-                    // RG exists but not a Z? Skip payload safely
-                    p = skip_payload(p, e, T);
-                }
-            } else {
-                // Not RG -> skip
-                p = skip_payload(p, e, T);
-            }
-        }
-    }*/
-
-    //profiler.stop(IOStageId::SAMStructUpdates);
 }
 
-static inline const uint8_t* skip_payload(const uint8_t* q, const uint8_t* e, char T) {
+static const uint8_t* skip_payload(const uint8_t* q,
+                                          const uint8_t* e,
+                                          char T)
+{
+    auto adv = [&](size_t n) -> const uint8_t* {
+        const uint8_t* r = q + n;
+        return (r <= e) ? r : e;
+    };
+
     switch (T) {
-        case 'A': case 'c': case 'C': return q + 1;
-        case 's': case 'S':           return (q + 2 <= e) ? q + 2 : e;
-        case 'i': case 'I': case 'f': return (q + 4 <= e) ? q + 4 : e;
+        // 1-byte scalar
+        case 'A': case 'c': case 'C':
+            return adv(1);
+
+            // 2-byte scalar
+        case 's': case 'S':
+            return adv(2);
+
+            // 4-byte scalar
+        case 'i': case 'I': case 'f':
+            return adv(4);
+
+            // Zero-terminated string / hex
         case 'Z': case 'H': {
             const uint8_t* r = q;
             while (r < e && *r != 0) ++r;
             return (r < e) ? (r + 1) : e; // include NUL if present
         }
+
+            // Array
         case 'B': {
-            if (q + 5 > e) return e;     // subtype + count
+            // Need at least subtype(1) + count(4)
+            if (q + 5 > e) return e;
+
             const char subtype = char(*q++);
-            int32_t count = 0;
-            std::memcpy(&count, q, 4); q += 4;
-            size_t elem = 0;
-            switch (subtype) { case 'c': case 'C': elem = 1; break;
-                case 's': case 'S': elem = 2; break;
-                default:            elem = 4; break; }
-            size_t bytes = size_t(count) * elem;
-            return (q + bytes <= e) ? (q + bytes) : e;
+            uint32_t count = 0;
+            std::memcpy(&count, q, 4); // BAM: little-endian
+            q += 4;
+
+            size_t elem_size;
+            switch (subtype) {
+                case 'c': case 'C': elem_size = 1; break;
+                case 's': case 'S': elem_size = 2; break;
+                case 'i': case 'I':
+                case 'f':           elem_size = 4; break;
+                default:            elem_size = 4; break; // safe fallback
+            }
+
+            // Overflow-safe: if count * elem_size would overflow, treat as truncated
+            if (elem_size != 0 && count > SIZE_MAX / elem_size) {
+                return e;
+            }
+            size_t bytes = size_t(count) * elem_size;
+
+            const uint8_t* r = q + bytes;
+            return (r <= e) ? r : e;
         }
-        default: return e;
+
+        default:
+            return e;
     }
 }
 
@@ -361,7 +309,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
     size_t idx,
     VariableLenFieldsVar const& fieldsOff,
     VariableLenFieldsVar const& fieldsSizes,
-    VariableLenFieldsVar const& outOff)    // pass TAGS so we can write at fixed offsets
+    VariableLenFieldsVar const& outOff)
 {
     ByteScanner bs; bs.reset(bytes);
 
@@ -452,13 +400,8 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
                     const uint8_t* z = p;
                     while (z < e && *z != 0) ++z;
                     const size_t len = size_t(z - p);
-                    // Lookup without allocating: string_view into arena bytes
-                    std::string rg_id{ reinterpret_cast<const char*>(p), len };
 
-                    // ---- header lookup (adapt to your API) ----
-                    // Example A: int id = reads.GetHdr().ReadGroups().MapId(rg_id);
-                    // Example B: auto idOpt = reads.GetHdr().ReadGroups().find(rg_id);
-                    //            if (idOpt) rg_int = *idOpt;
+                    std::string rg_id{ reinterpret_cast<const char*>(p), len };
                     rg_int = reads.GetHdr().getReadGroupRecord().getId(rg_id);
 
                     // advance past the NUL (if any)

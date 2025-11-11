@@ -30,27 +30,20 @@ CompressedInputStream::CompressedInputStream(const std::string &input): path(inp
     if (fd_ < 0) throw std::runtime_error("open() failed for input BGZF");
 
     // zlib stream: enable gzip wrapper (16 + MAX_WBITS)
-    std::memset(&zstrm_, 0, sizeof(zstrm_));
+    /*std::memset(&zstrm_, 0, sizeof(zstrm_));
     if (inflateInit2(&zstrm_, 16 + MAX_WBITS) != Z_OK) {
         ::close(fd_); fd_ = -1;
         throw std::runtime_error("zlib inflateInit2 failed");
-    }
-#ifdef USE_LIBDEFLATE
-        decomp_ = libdeflate_alloc_decompressor();
-        if (!decomp_) {
-            inflateEnd(&zstrm_);
-            ::close(fd_); fd_ = -1;
-            throw std::runtime_error("libdeflate_alloc_decompressor failed");
-        }
-#endif
-    //if (opts.stash_reserve_bytes)
-    stash_.reserve(opts.stash_reserve_bytes);
+    }*/
 
-    // temp buffers (grown on demand)
-    //tmp_decomp_.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::vector<uint8_t>(BGZF_BLOCK_SIZE)); // BGZF blocks decompress to ≤ 64 KiB
-    //tmp_comp_.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::vector<uint8_t>(BGZF_BLOCK_SIZE)); // BGZF blocks compress to ≤ 64 KiB
-    //tmp_decomp_.resize(opts.stash_cap_bytes); // BGZF blocks decompress to ≤ 64 KiB
-    //tmp_comp_.resize(opts.stash_cap_bytes);
+    decomp_ = libdeflate_alloc_decompressor();
+    if (!decomp_) {
+        //inflateEnd(&zstrm_);
+        ::close(fd_); fd_ = -1;
+        throw std::runtime_error("libdeflate_alloc_decompressor failed");
+    }
+
+    stash_.reserve(opts.stash_reserve_bytes);
     comp_pool.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::array<uint8_t, BGZF_BLOCK_SIZE>{});
 }
 
@@ -211,7 +204,6 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
                 return;
             }
 
-        #ifdef USE_LIBDEFLATE
             size_t out_n = 0;
             // (optional) thread-local decompressor to avoid alloc/free overhead
             thread_local libdeflate_decompressor* tls_d = []{
@@ -228,18 +220,6 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             if (st != LIBDEFLATE_SUCCESS || out_n != j.decomp_size) {
                 status[i] = -1; return;
             }
-        #else
-            z_stream zs{};
-            if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) { status[i] = -1; return; }
-            zs.next_in   = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(comp_pool[i].data()));
-            zs.avail_in  = (uInt)j.comp_size;
-            zs.next_out  = reinterpret_cast<Bytef*>(stash_base + j.dest_off);
-            zs.avail_out = (uInt)j.decomp_size; // exact ISIZE bound
-            const int ret = inflate(&zs, Z_FINISH);
-            const size_t out_n = j.decomp_size - zs.avail_out;
-            inflateEnd(&zs);
-            if (ret != Z_STREAM_END || out_n != j.decomp_size) { status[i] = -1; return; }
-        #endif
 
             produced[i] = j.decomp_size;
             status[i]   = 0;
@@ -521,9 +501,6 @@ void CompressedInputStream::compact_stash_() {
 }
 
 CompressedInputStream::~CompressedInputStream() {
-#ifdef USE_LIBDEFLATE
     if (decomp_) libdeflate_free_decompressor(decomp_);
-#endif
-    inflateEnd(&zstrm_);
     if (fd_ >= 0) ::close(fd_);
 }

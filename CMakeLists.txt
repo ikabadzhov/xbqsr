@@ -167,9 +167,6 @@ add_executable(bqsr
 		sycl_parallel_library/memory/memory.h
 		sycl_parallel_library/load_balancing/load_balance.h
 		sycl_parallel_library/intervalsmove/intervalmove.h
-		bqsr/compute_bqsr_tables/ComputeBQSRTables.cpp
-		bqsr/compute_bqsr_tables/ComputeBQSRTables.h
-		bqsr/compute_bqsr_tables/ComputeBQSRTablesKernelData.h
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsFunctions.cpp
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsFunctions.h
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsData.h

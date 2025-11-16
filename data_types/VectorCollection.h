@@ -30,7 +30,11 @@ public:
     void SetAt(std::vector<T> &str, size_t idx);
     void SetAt(std::span<T> str, size_t idx);
     void Resize(size_t sz);
+    void Reserve(size_t sz);
     void ResizeData(size_t sz);
+    void ReserveData(size_t sz);
+    size_t Capacity();
+    size_t CapacityData();
     std::span<T> operator[](size_t idx);
     void Permute(std::vector<size_t>& indexes);
     T* Data();
@@ -59,8 +63,28 @@ void VectorCollection<T>::Resize(size_t sz) {
 }
 
 template<typename T>
+void VectorCollection<T>::Reserve(size_t sz) {
+    ptrs.reserve(sz);
+}
+
+template<typename T>
 void VectorCollection<T>::ResizeData(size_t sz) {
     data.resize(sz);
+}
+
+template<typename T>
+void VectorCollection<T>::ReserveData(size_t sz) {
+    data.reserve(sz);
+}
+
+template<typename T>
+size_t VectorCollection<T>::Capacity() {
+    return ptrs.capacity();
+}
+
+template<typename T>
+size_t VectorCollection<T>::CapacityData() {
+    return data.capacity();
 }
 
 template<typename T>

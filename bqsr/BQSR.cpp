@@ -321,9 +321,10 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
 
     profiler.start(StageId::AddReadGroup);
 
-    reads.TMP.reads_group_covariate_.resize(maxIdx);
+    //reads.TMP.reads_group_covariate_.resize(maxIdx);
+    std::vector<int32_t> reads_group_covariate_(maxIdx);
     tbb::parallel_for(0, maxIdx, [&](size_t idx) {
-        reads.TMP.reads_group_covariate_[idx] = readGroupCovariateId(hdr, reads, idx);
+        reads_group_covariate_[idx] = readGroupCovariateId(hdr, reads, idx);
     });
 
     profiler.stop(StageId::AddReadGroup);
@@ -371,7 +372,7 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
                       reads.RNAME.data(),
                       recalibrate_aln_flag.data(),
                       reads.FLAG.data(),
-                      reads.TMP.reads_group_covariate_.data(),
+                      reads_group_covariate_.data(),
                       batch_size);
 
 
@@ -379,13 +380,13 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
 
 
     // Set up your configuration using available device memory
-    ComputeSkipSliceConfiguration config;
+    /*ComputeSkipSliceConfiguration config;
     //size_t available_mem = ConfigDeviceMemoryUsage::max_memory;//32*std::pow(2,30); //q.get_device().get_info<sycl::info::device::global_mem_size>() - 2 * pow(2, 30);
     size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_allocation_;
     config.max_memory = available_mem / 2;
-
+*/
     // Process the current batch with your kernel
-    batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(q_, in, out, compute_skip_slice_kernel, config);
+    batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(q_process_, q_transfer_, in, out, compute_skip_slice_kernel, config, batch_process, batch_transfer);
     q_.wait();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 
@@ -396,7 +397,7 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
 }
 
 BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& knownSites,
-                                   sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), q_(queue) {
+                                   sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables) : recalibration_tables(recalibration_tables), q_(queue), q_process_(queue.get_context(), queue.get_device(), sycl::async_handler{}), q_transfer_(queue.get_context(), queue.get_device(), sycl::async_handler{}) {
     Timer t;
     t.reset();
 
@@ -454,7 +455,15 @@ BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& kno
         "Total device memory allocated: " + std::to_string(constant_allocation_) +
         " bytes (" + std::to_string(constant_allocation_ / (1024.0 * 1024.0 * 1024.0)) + " GB)");
 
-    Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device tables in shared memory: " + std::to_string(t.elapsed()));
+    Logger::getLogger().log(LOG_INFO, "Time to allocate and initialize device memory: " + std::to_string(t.elapsed()));
+}
+
+void BaseRecalibrator::initializeDeviceMemory() {
+    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_allocation_;
+    config.max_memory = available_mem / 2;
+
+    batch_process = std::make_shared<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>>(q_transfer_, q_process_, config);
+    batch_transfer = std::make_shared<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>>(q_transfer_, q_process_, config);
 }
 
 //[[clang::optnone]]

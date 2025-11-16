@@ -26,6 +26,7 @@
 #include "sycl_parallel_library/scan/scan.h"
 #include "sycl_parallel_library/segmented_reduce/segreduce.h"
 #include "sycl_parallel_library/segmented_scan/segscan.h"
+#include "timer/ProfilerIO.h"
 
 using namespace std;
 using namespace chrono;
@@ -129,6 +130,7 @@ int main(int argc, char **argv) {
         knownSites = std::make_unique<KnownSites>(args.known_sites, header);
         tables = std::make_shared<BaseRecalibratorTables>(bqsrTableConfig, queue);
         bqsrRecal = std::make_shared<BaseRecalibrator>(*referenceGenome, *knownSites, queue, *header, *tables);
+        bqsrRecal->initializeDeviceMemory();
 
         // Stage 1: Recalibrate (no output here)
         stages.emplace_back("BQSR-Recalibrate", [recal = bqsrRecal](SamAlignments& batch){
@@ -147,6 +149,7 @@ int main(int argc, char **argv) {
 
     if (args.is_apply()) {
         tables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig, queue);
+        tables->initializeDeviceMemory();
         tables->LoadFromReport(args.recal_table, *header);
         alignmentWriter = AlignmentWriterFactory::open(args.output_bam);
 
@@ -183,7 +186,7 @@ int main(int argc, char **argv) {
     engine.run_streaming(*alignmentReader, header);
     //t.elapsed();
     Logger::getLogger().log(LOG_INFO, "Time to run all stages: " + std::to_string(t.elapsed()) + " sec");
-
+    ProfilerIO::instance().report();
     return 0;
 }
 

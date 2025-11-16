@@ -23,6 +23,38 @@ void OptionalFields::Resize(size_t sz) {
     ArrayTags_f.Resize(sz);*/
 }
 
+void OptionalFields::Reserve(size_t sz) {
+    RG.reserve(sz);
+    tagsBlobOff.reserve(sz);
+    tagsBlobSize.reserve(sz);
+    /*IntegerTags.Resize(sz);
+    FloatTags.Resize(sz);
+    StringTags.Resize(sz);
+    CharTags.Resize(sz);
+
+    ArrayTagsHex.Resize(sz);
+
+    ArrayTags_c.Resize(sz);
+    ArrayTags_C.Resize(sz);
+    ArrayTags_s.Resize(sz);
+    ArrayTags_S.Resize(sz);
+    ArrayTags_i.Resize(sz);
+    ArrayTags_I.Resize(sz);
+    ArrayTags_f.Resize(sz);*/
+}
+
+void OptionalFields::ReserveData(size_t sz) {
+    tagArena.reserve(sz);
+}
+
+size_t OptionalFields::Capacity() {
+    return tagsBlobSize.capacity();
+}
+
+size_t OptionalFields::CapacityData() {
+    return tagArena.capacity();
+}
+
 void OptionalFields::Permute(std::vector<size_t> &indices) {
     permute(indices, this->RG);
     this->IntegerTags.Permute(indices);

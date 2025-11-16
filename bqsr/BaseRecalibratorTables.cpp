@@ -16,7 +16,7 @@ BaseRecalibratorTables::BaseRecalibratorTables(const BQSRTableConfig& cfg, const
       contextLen(cfg.context_len),
       nCycleCov (cfg.max_cycle * 2),
       nContextCov(MaxContextCovariateKey(cfg.context_len) + 1),
-      q_(q), ctx_(q_.get_context()), dev_(q_.get_device()) {
+      q_(q), ctx_(q_.get_context()), dev_(q_.get_device()), q_process_(q.get_context(), q.get_device(), sycl::async_handler{}), q_transfer_(q.get_context(), q.get_device(), sycl::async_handler{}) {
 
     bqsrEntry defaultEntry(0, 0);
     QualityScores_.table.resize(nReadGroups * nQualScore, defaultEntry);
@@ -25,7 +25,25 @@ BaseRecalibratorTables::BaseRecalibratorTables(const BQSRTableConfig& cfg, const
     Cycles_.empirical_qualities.resize(nReadGroups * nQualScore * nCycleCov, 0);
     Contexts_.table.resize(nReadGroups * nQualScore * nContextCov, defaultEntry);
     Contexts_.empirical_qualities.resize(nReadGroups * nQualScore * nContextCov, 0);
+
+
+
+   /* batch_process = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
+    batch_transfer = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);*/
 }
+
+void BaseRecalibratorTables::initializeDeviceMemory() {
+    recalibrated_quality_scores = mem_t<int>(nReadGroups * nQualScore * nCycleCov * (nContextCov+1), q_, memory_space_device);
+    q_.fill(recalibrated_quality_scores.data(), -1, recalibrated_quality_scores.size()).wait();
+
+    size_t constant_memory = nReadGroups * nQualScore * nCycleCov * (nContextCov+1) * sizeof(int);
+    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_memory - 515 * 1024 * 1024;
+    config.max_memory = available_mem / 2;
+
+    batch_process = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
+    batch_transfer = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
+}
+
 
 // assumes you have something like:
 // RecalibrationTable& qualityScores(); // returns an object that has .table (std::vector<bqsrEntry>) or similar
@@ -147,10 +165,10 @@ void BaseRecalibratorTables::FinalizeBQSRTables() {
 void BaseRecalibratorTables::ApplyBQSR(SamAlignments &reads, int32_t quantizeLevels, std::vector<uint8_t> &sqqList) {
     Timer t;
 
-    reads.TMP.reads_group_covariate_.resize(reads.GetAlnsNum());
+    std::vector<int32_t> reads_group_covariate(reads.GetAlnsNum());
     tbb::parallel_for(0UL, reads.GetAlnsNum(), [&](size_t idx) {
     //for (size_t idx = 0; idx < reads.GetAlnsNum(); idx++) {
-        reads.TMP.reads_group_covariate_[idx] = readGroupCovariateId(reads.GetHdr(), reads, idx);
+        reads_group_covariate[idx] = readGroupCovariateId(reads.GetHdr(), reads, idx);
     });/*
     std::vector<int32_t> RG(reads.GetAlnsNum());
     tbb::parallel_for(0UL, reads.GetAlnsNum(), [&](size_t idx) {
@@ -169,8 +187,6 @@ void BaseRecalibratorTables::ApplyBQSR(SamAlignments &reads, int32_t quantizeLev
 
         initializeQuantizedQualityScores(this->QualityScores_, quantizeLevels, quantizationMap, quantizedQualityScores);
 
-        recalibrated_quality_scores = mem_t<int>(nReadGroups * nQualScore * nCycleCov * (nContextCov+1), q_, memory_space_device);
-        q_.fill(recalibrated_quality_scores.data(), -1, recalibrated_quality_scores.size()).wait();
         is_apply_bqsr_initialized = true;
     });
 
@@ -191,7 +207,7 @@ void BaseRecalibratorTables::ApplyBQSR(SamAlignments &reads, int32_t quantizeLev
                           reads.SEQ.Ptrs().data() + offset,                 // pointer array remains sliced at batch start
                           reinterpret_cast<uint8_t*>(reads.QUAL.Data() + flat_offset_qualities),      // adjust using pointer array
                           reads.FLAG.data() + offset,
-                          reads.TMP.reads_group_covariate_.data(),
+                          reads_group_covariate.data(),
                           combinedBQSRTable.data(), combinedBQSRTable.size(), quantizedQualityScores.data(), quantizedQualityScores.size(),
                           staticQuantizedScores.data(), staticQuantizedScores.size(), recalibrated_quality_scores.data(), current_batch_size);
 
@@ -199,13 +215,13 @@ void BaseRecalibratorTables::ApplyBQSR(SamAlignments &reads, int32_t quantizeLev
     ApplyBqsrOutput out(reinterpret_cast<uint8_t*>(reads.QUAL.Data())); // Not actullay used, but here for compatibility with my API
 
 
-    // Set up your configuration using available device memory
-    AppyBqsrKernelConfiguration config;
-    size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>();
-    config.max_memory = available_mem / 3;
+    // // Set up your configuration using available device memory
+    // AppyBqsrKernelConfiguration config;
+    // size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>();
+    // config.max_memory = available_mem / 3;
 
     // Process the current batch with your kernel
-    batch_processing_variable_length<AppyBqsrKernelData, AppyBqsrKernelConfiguration, ApplyBqsrSequencesInput, ApplyBqsrOutput>(q_, in, out, apply_bqsr_kernel, config);
+    batch_processing_variable_length<AppyBqsrKernelData, AppyBqsrKernelConfiguration, ApplyBqsrSequencesInput, ApplyBqsrOutput>(q_process_, q_transfer_, in, out, apply_bqsr_kernel, config, batch_process, batch_transfer);
     q_.wait();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 

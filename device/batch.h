@@ -84,10 +84,11 @@ void  batch_processing(sycl::device& device, input_data_t& input, output_data_t&
 
 template <typename kernel_data_t, typename batch_config_t, typename input_data_t, typename output_data_t, typename proc_func_t>
 requires DerivedFromInputDataT<input_data_t> && DerivedFromOutputDataT<output_data_t> && DeviceDataInterface<kernel_data_t, batch_config_t, input_data_t, output_data_t>
-void batch_processing_variable_length(sycl::queue &queue, input_data_t& input, output_data_t& output, proc_func_t processing_f, batch_config_t& batch_config) {
+void batch_processing_variable_length(sycl::queue &queue_proc, sycl::queue &queue_transf, input_data_t& input, output_data_t& output, proc_func_t processing_f, batch_config_t& batch_config, std::shared_ptr<Batch<kernel_data_t, batch_config_t>> batch_process,
+    std::shared_ptr<Batch<kernel_data_t, batch_config_t>> batch_transfer) {
 
 
-    sycl::queue q_processing(queue.get_context(), queue.get_device(), sycl::async_handler{},
+    /*sycl::queue q_processing(queue.get_context(), queue.get_device(), sycl::async_handler{},
                              sycl::property_list{sycl::property::queue::enable_profiling()});
 
     sycl::queue q_transfer(queue.get_context(), queue.get_device(), sycl::async_handler{},
@@ -95,7 +96,7 @@ void batch_processing_variable_length(sycl::queue &queue, input_data_t& input, o
 
     std::shared_ptr<Batch<kernel_data_t, batch_config_t>> batch_process = std::make_shared<Batch<kernel_data_t, batch_config_t>>(q_transfer, q_processing, batch_config);
     std::shared_ptr<Batch<kernel_data_t, batch_config_t>> batch_transfer = std::make_shared<Batch<kernel_data_t, batch_config_t>>(q_transfer, q_processing, batch_config);
-
+*/
 
     // --- loader sync ---
     std::mutex m_load;

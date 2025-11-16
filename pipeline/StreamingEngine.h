@@ -61,35 +61,50 @@ public:
     size_t producer_ns_last = 0;
     size_t producer_batches = 0;
 
-    StreamingEngine(Config cfg, std::vector<Stage>&& stages) : cfg_(cfg), stages_(std::move(stages)), chan_(cfg_.channel_capacity) {}
+    StreamingEngine(Config cfg, std::vector<Stage>&& stages) : cfg_(cfg), stages_(std::move(stages)), chan_(cfg_.channel_capacity), free_chan_(cfg.channel_capacity) {}
 
-    StreamingEngine(Config cfg, std::vector<Stage>&& stages, std::vector<FinalizeFn>&& finals) : cfg_(cfg), stages_(std::move(stages)), finalizers_(std::move(finals)), chan_(cfg_.channel_capacity) {}
+    StreamingEngine(Config cfg, std::vector<Stage>&& stages, std::vector<FinalizeFn>&& finals) : cfg_(cfg), stages_(std::move(stages)), finalizers_(std::move(finals)), chan_(cfg_.channel_capacity), free_chan_(cfg.channel_capacity) {}
 
     void add_finalizer(FinalizeFn f) { finalizers_.push_back(std::move(f)); }
 
     template<class ReaderT>
     void run_streaming(ReaderT& reader, std::shared_ptr<Header> hdr) {
+        free_chan_.push(Batch(hdr));
+        free_chan_.push(Batch(hdr));
+
+        //free_chan_.push(Batch(hdr));
+        //free_chan_.push(Batch(hdr));
+
         // Producer: push batches from reader
         std::jthread producer([&](std::stop_token st){
             try {
                 // Reader must call the callback once per parsed batch:
                 // void ParseAlignmentStreamed(hdr, [&](Batch&& b){ chan_.push(std::move(b)); });
+
                 auto t_total0 = clock::now();
                 auto t_prev   = t_total0;
 
-                reader.ParseAlignmentStreamed(hdr, [&](Batch&& b){
-                    if (st.stop_requested()) return;
+                reader.ParseAlignmentStreamed(hdr,
+                    [&] () -> Batch {
+                        auto b = free_chan_.pop();
+                        if (b.has_value()) {
+                            return std::move(b.value());
+                        }
+                        return Batch(hdr);
+                    },
+                    [&](Batch&& b) {
+                        if (st.stop_requested()) return;
 
-                    auto t_now = clock::now();
-                    auto dt= std::chrono::duration_cast<std::chrono::nanoseconds>(t_now - t_prev).count();
+                        auto t_now = clock::now();
+                        auto dt= std::chrono::duration_cast<std::chrono::nanoseconds>(t_now - t_prev).count();
 
-                    producer_ns_total += dt; //.fetch_add(dt, std::memory_order_relaxed);
-                    producer_ns_last += dt; //.store(dt, std::memory_order_relaxed);
-                    producer_batches += 1; //.fetch_add(1, std::memory_order_relaxed);
+                        producer_ns_total += dt; //.fetch_add(dt, std::memory_order_relaxed);
+                        producer_ns_last += dt; //.store(dt, std::memory_order_relaxed);
+                        producer_batches += 1; //.fetch_add(1, std::memory_order_relaxed);
 
-                    t_prev = t_now;               // baseline for the next iteration
-                    chan_.push(std::move(b));
-                });
+                        t_prev = t_now;               // baseline for the next iteration
+                        chan_.push(std::move(b));
+                    });
                 auto t_end = clock::now();
                 const auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_prev).count();
                 ns_producer = dt;
@@ -108,7 +123,7 @@ public:
                         if (st.stop_requested()) break;
                         auto item = chan_.pop();
                         if (!item) break;  // closed & drained
-                        Batch& batch = *item;
+                        Batch batch = std::move(*item);
                         //auto batch_t0 = clock::now();
                         for (auto& s : stages_) {
                             const auto t0 = clock::now();
@@ -118,11 +133,13 @@ public:
                             s.ns_total.fetch_add(dt, std::memory_order_relaxed);
                             s.calls.fetch_add(1, std::memory_order_relaxed);
                         }
+                        free_chan_.push(std::move(batch));
                     }
                 } catch (...) {
                     cons_ex_ = std::current_exception();
                     for (auto& t : workers_) t.request_stop();
                     chan_.close();
+                    free_chan_.close();
                 }
             });
         }
@@ -182,6 +199,7 @@ private:
     std::vector<Stage> stages_;
     std::vector<FinalizeFn> finalizers_;
     BoundedChannel<Batch> chan_;
+    BoundedChannel<Batch> free_chan_;
     std::vector<std::jthread> workers_;
     std::exception_ptr prod_ex_{}, cons_ex_{};
 };

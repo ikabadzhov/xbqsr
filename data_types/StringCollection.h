@@ -25,6 +25,9 @@ public:
 
     void SetAt(std::string_view str, size_t idx);
     void Resize(size_t sz);
+
+    void Reserve(size_t sz);
+
     std::string_view operator[](size_t idx) const;
     char* Data();
     StringField* Ptrs();
@@ -35,6 +38,17 @@ public:
         data.resize(sz);
     }
 
+    void ReserveData(size_t sz) {
+        data.reserve(sz);
+    }
+
+    size_t Capacity() {
+      return ptrs.capacity();
+    }
+
+    size_t CapacityData() {
+        return data.capacity();
+    }
 };
 
 

@@ -30,6 +30,11 @@ void StringCollection::Resize(size_t sz) {
     ptrs.resize(sz);
 }
 
+void StringCollection::Reserve(size_t sz) {
+    size = sz;
+    ptrs.reserve(sz);
+}
+
 
 void StringCollection::Permute(std::vector<size_t>& indexes) {
     StringCollection sorted_collection;

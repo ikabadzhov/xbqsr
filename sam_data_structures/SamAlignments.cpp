@@ -2,6 +2,25 @@
 
 #include <future>
 
+
+void SamAlignments::EnsureCapacity(size_t n) {
+    capacity = n;
+    // Only affect capacity, not logical N_ALNS
+    PNEXT.reserve(n);
+    TLEN.reserve(n);
+    POS.reserve(n);
+    FLAG.reserve(n);
+    MAPQ.reserve(n);
+    QNAME.Reserve(n);
+    TILE.reserve(n);
+    RNAME.reserve(n);
+    RNEXT.reserve(n);
+    SEQ.Reserve(n);
+    QUAL.Reserve(n);
+    CIGAR.Reserve(n);
+    TAGS.Reserve(n);
+}
+
 void SamAlignments::Resize(size_t n) {
     N_ALNS = n;
     PNEXT.resize(n);
@@ -18,6 +37,10 @@ void SamAlignments::Resize(size_t n) {
     CIGAR.Resize(n);
     TAGS.Resize(n);
     //UnusedTags.resize(n);
+}
+
+size_t SamAlignments::Capacity() {
+    return capacity;
 }
 
 void SamAlignments::Permute(std::vector<size_t>& indices) {

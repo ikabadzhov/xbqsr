@@ -7,6 +7,7 @@
 #include "../sam_data_structures/SamAlignments.h"
 #include "../sam_data_structures/SamHeader.h"
 #include "../sycl_parallel_library/memory/memory.h"
+#include "apply_bqsr/ApplyBqsrKernelData.h"
 
 constexpr int32_t INVALID_INDEX = INT32_MAX - 1;
 
@@ -56,6 +57,9 @@ public:
     [[nodiscard]] BaseRecalibratorTablesAccessor make_accessor() const noexcept {
         return { nReadGroups, nQualScore, maxCycle, contextLen, nCycleCov, nContextCov };
     }
+
+    void initializeDeviceMemory();
+
     // --- Getters (const + mutable) ---
     [[nodiscard]] inline const bqsrTable& qualityScores() const noexcept { return QualityScores_; }
     [[nodiscard]] inline bqsrTable&       qualityScores()       noexcept { return QualityScores_; }
@@ -125,6 +129,13 @@ private:
     sycl::queue q_;
     sycl::context ctx_;
     sycl::device dev_;
+
+    sycl::queue q_process_;
+    sycl::queue q_transfer_;
+
+    AppyBqsrKernelConfiguration config;
+    std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>> batch_process;
+    std::shared_ptr<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>> batch_transfer;
 
     mem_t<int> recalibrated_quality_scores;
     bool is_apply_bqsr_initialized = false;

@@ -60,11 +60,19 @@ private:
     std::shared_ptr<Header> hdr;
     size_t N_ALNS{};
 
+    size_t capacity;
     /**
      * Mandatory fields
      **/
 public:
-    explicit SamAlignments(std::shared_ptr<Header> h) : hdr(std::move(h)) {}
+    explicit SamAlignments(std::shared_ptr<Header> h) : hdr(std::move(h)) {
+        EnsureCapacity(DEFAULT_NUM_ALIGNMENTS);
+        QNAME.ReserveData(MAX_QNAME_LENGTH * DEFAULT_NUM_ALIGNMENTS);
+        QUAL.ReserveData(MAX_QUAL_LENGTH * DEFAULT_NUM_ALIGNMENTS);
+        SEQ.ReserveData(MAX_SEQ_LENGTH * DEFAULT_NUM_ALIGNMENTS);
+        CIGAR.ReserveData(MAX_CIGAR_OPS * DEFAULT_NUM_ALIGNMENTS);
+        TAGS.ReserveData(MAX_TAGS_LENGTH * DEFAULT_NUM_ALIGNMENTS);
+    }
 
     StringCollection QNAME;
     std::vector<tileInfo> TILE;
@@ -87,8 +95,10 @@ public:
     TmpFields TMP;
 
 public:
+    void EnsureCapacity(size_t n);
 
     void Resize(size_t n);
+    size_t Capacity();
 
     [[nodiscard]] Header& GetHdr();
     size_t GetAlnsNum() const;

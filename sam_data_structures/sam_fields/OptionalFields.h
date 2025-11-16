@@ -41,6 +41,10 @@ public:
     TagsCollectionArray<float> ArrayTags_f;
 
     void Resize(size_t sz);
+    void Reserve(size_t sz);
+    void ReserveData(size_t sz);
+    size_t Capacity();
+    size_t CapacityData();
     void Permute(std::vector<size_t>& indices);
     bool ContainTag(const std::string& tag);
 

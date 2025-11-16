@@ -11,6 +11,7 @@
 #include "TablesBQSR.h"
 #include "../sam_data_structures/SamAlignments.h"
 #include "../sycl_parallel_library/memory/context.h"
+#include "compute_vectors_for_covariates/ComputeCovariateVectorsData.h"
 
 /*
  * BaseRecalibrator implements the first step of base recalibration.
@@ -19,10 +20,16 @@ class BaseRecalibrator {
 public:
     BaseRecalibratorTables& recalibration_tables;
     sycl::queue q_;
+    sycl::queue q_process_;
+    sycl::queue q_transfer_;
     mem_t<Interval> local_known_intervals;
     mem_t<SpanFieldLong> local_known_intervals_ptrs;
     mem_t<SpanFieldLong> fasta_ptrs;
     mem_t<uint8_t> fasta;
+
+    ComputeSkipSliceConfiguration config;
+    std::shared_ptr<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>> batch_process;
+    std::shared_ptr<Batch<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration>> batch_transfer;
 
     mem_t<bqsrEntry> tables_quality;
     mem_t<bqsrEntry> tables_cycle;
@@ -32,6 +39,9 @@ public:
 
     explicit BaseRecalibrator(MappedFasta &referenceGenome, KnownSites &knownSites,
                               sycl::queue &queue, Header &hdr, BaseRecalibratorTables& recalibration_tables);// : fastaMap(fastaMap) {};
+
+    void initializeDeviceMemory();
+
     void exportTables(BaseRecalibratorTables& recalibration_tables);
     void mergeTables(BaseRecalibratorTables& recalibration_tables);
     void Recalibrate(SamAlignments& reads);

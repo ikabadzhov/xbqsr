@@ -462,7 +462,6 @@ void BamWriter::WriteAlignmentBatch(SamAlignments& block) {
                 // We can start filling the other buffer right away
                 batch_process_->reset();
 
-                // Optional: if you want strict backpressure, wait here until write completes:
                 {
                     std::unique_lock lk(m_);
                     cv_.wait(lk, [&]{ return wrote_ || writer_ex_ != nullptr; });

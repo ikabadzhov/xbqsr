@@ -62,36 +62,42 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Validate requested number of GPUs
-    int n_gpus = args.gpus;
-    if (n_gpus == -1) {
-        // -1 means use all available GPUs
-        n_gpus = gpus.size();
-    } else if (n_gpus > static_cast<int>(gpus.size())) {
-        Logger::getLogger().log(LOG_FATAL, "Requested ", n_gpus, " GPUs but only ", gpus.size(),
-                  " GPU(s) available.");
-        return 1;
-    }
-
-    //gpus.resize(n_gpus);
-
-    Logger::getLogger().log(LOG_INFO, "Devices availables:");
+    Logger::getLogger().log(LOG_INFO, "Available devices:");
     for (size_t i = 0; i < gpus.size(); ++i) {
         Logger::getLogger().log(LOG_INFO, "  [", i, "] ",
             gpus[i].get_info<sycl::info::device::name>(), " (",
             gpus[i].get_info<sycl::info::device::vendor>(), ")");
     }
 
-    int selected_dev = 3;
+    // Determine which devices to use
+    std::vector<int> selected_devices;
+    if (args.gpu_use_all) {
+        // Use all available devices
+        for (size_t i = 0; i < gpus.size(); ++i) {
+            selected_devices.push_back(static_cast<int>(i));
+        }
+    } else {
+        // Use specified devices
+        selected_devices = args.gpu_devices;
+    }
 
-    Logger::getLogger().log(LOG_INFO, "Selected device:");
-    Logger::getLogger().log(LOG_INFO, "  [", selected_dev, "] ",
-            gpus[selected_dev].get_info<sycl::info::device::name>(), " (",
-            gpus[selected_dev].get_info<sycl::info::device::vendor>(), ")");
+    // Validate device indices
+    for (int dev_idx : selected_devices) {
+        if (dev_idx < 0 || dev_idx >= static_cast<int>(gpus.size())) {
+            Logger::getLogger().log(LOG_FATAL, "Invalid device index [", dev_idx, "]. Available devices: 0-", gpus.size() - 1);
+            return 1;
+        }
+    }
 
-    gpus[0] = gpus[selected_dev];
+    Logger::getLogger().log(LOG_INFO, "Selected device(s):");
+    for (int dev_idx : selected_devices) {
+        Logger::getLogger().log(LOG_INFO, "  [", dev_idx, "] ",
+            gpus[dev_idx].get_info<sycl::info::device::name>(), " (",
+            gpus[dev_idx].get_info<sycl::info::device::vendor>(), ")");
+    }
 
-    sycl::device device = gpus[0];
+    // For now, use the first selected device (single-GPU support)
+    sycl::device device = gpus[selected_devices[0]];
 
     sycl::queue queue(device);
     /**** Input parsing for reading Alignment Data *****/

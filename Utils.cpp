@@ -275,24 +275,67 @@ Arguments parse_arguments(int argc, char** argv) {
         }
     }
 
-    // Parse optional --gpus parameter
+    // Parse optional --gpus parameter (comma-separated list of device indices or 'all')
     if (vm.count("gpus")) {
         std::string gpus_str = vm["gpus"].as<string>();
         if (gpus_str == "all") {
-            args.gpus = -1;  // -1 means use all available GPUs
+            args.gpu_use_all = true;  // Use all available GPUs
         } else {
-            try {
-                args.gpus = std::stoi(gpus_str);
-                if (args.gpus < 1) {
-                    std::cerr << "Error: Number of GPUs must be at least 1 or 'all' (--gpus)\n" << std::endl;
+            // Parse comma-separated list of device indices
+            std::string delimiter = ",";
+            size_t pos = 0;
+            std::string token;
+            while ((pos = gpus_str.find(delimiter)) != std::string::npos) {
+                token = gpus_str.substr(0, pos);
+                // Trim whitespace
+                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
+                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                try {
+                    int device_id = std::stoi(token);
+                    if (device_id < 0) {
+                        std::cerr << "Error: Device indices must be non-negative (--gpus)\n" << std::endl;
+                        exit(-1);
+                    }
+                    args.gpu_devices.push_back(device_id);
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid device index '" << token
+                              << "'. Must be a non-negative integer or 'all' (--gpus)\n" << std::endl;
                     exit(-1);
                 }
-            } catch (const std::invalid_argument& e) {
-                std::cerr << "Error: Invalid GPU parameter value '" << gpus_str
-                          << "'. Must be a positive integer or 'all' (--gpus)\n" << std::endl;
+                gpus_str.erase(0, pos + delimiter.length());
+            }
+
+            // Process the last token
+            if (!gpus_str.empty()) {
+                token = gpus_str;
+                // Trim whitespace
+                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
+                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                try {
+                    int device_id = std::stoi(token);
+                    if (device_id < 0) {
+                        std::cerr << "Error: Device indices must be non-negative (--gpus)\n" << std::endl;
+                        exit(-1);
+                    }
+                    args.gpu_devices.push_back(device_id);
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << "Error: Invalid device index '" << token
+                              << "'. Must be a non-negative integer or 'all' (--gpus)\n" << std::endl;
+                    exit(-1);
+                }
+            }
+
+            // Check if at least one device was specified
+            if (args.gpu_devices.empty()) {
+                std::cerr << "Error: At least one device index must be specified or use 'all' (--gpus)\n" << std::endl;
                 exit(-1);
             }
         }
+    } else {
+        // Default: use first GPU
+        args.gpu_devices.push_back(0);
     }
 
     // Parse optional --verbose or -v parameter

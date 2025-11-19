@@ -334,7 +334,6 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     auto *clippedQualities = reads.QUAL.Data();
     auto *clippedQualitiesPtrs = reads.QUAL.Ptrs().data();
 
-
     std::vector<uint8_t> recalibrate_aln_flag(reads.GetAlnsNum());
 
     Logger::getLogger().log(LOG_INFO, "Time to declare and initialize variables: " + std::to_string(t.elapsed()));

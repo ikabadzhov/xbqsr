@@ -62,7 +62,7 @@ void aggregate_dense_atomic(
                 size_t i = it.get_global_id(0);
                 for (; i < N; i += stride) {
                     IndexT idx = d_indexes[i];
-                    if (idx < 0) continue;          // skip invalid
+                    if (idx == INVALID_INDEX) continue;          // skip invalid
                     if (static_cast<size_t>(idx) >= table_bins) continue; // guard
 
                     // Relaxed atomics are fine here.
@@ -570,7 +570,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         int output_i = lbs.merge_range.a_begin + j;
                         int idx = lbs.segments[k];
                         int i = lbs.ranks[k];
-                        d_quality_table_indexes[output_i]++;
+
                         if (!d_recalibrated[idx]) {
                             return;
                         }
@@ -578,6 +578,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         if (d_sequences_ptr[idx].len == 0) {
                             return;
                         }
+
+                        //d_quality_table_indexes[output_i]++;
 
                         size_t l = d_sequences_ptr[idx].len;
                         int32_t readGrpCov = d_reads_group_covariate[idx];
@@ -592,20 +594,20 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                             return;
                         }
 
-                        int32_t ok = simpleBaseToBaseIndexTable[static_cast<uint8_t>(d_sequences[output_i])];
+                        int32_t ok = simpleBaseToBaseIndexTable[static_cast<uint8_t>(d_sequences[d_sequences_ptr[idx].start + i])];
 
                         if (ok < 0) {
                             // continue;
                             return;
                         }
-                        char qual = d_qualities[output_i];
+                        char qual = d_qualities[d_sequences_ptr[idx].start + i];
 
                         if (qual < MIN_INTERESTING_QUAL) {
                             //    continue;
                             return;
                         }
 
-                        int32_t errVal = d_snps[output_i];
+                        int32_t errVal = d_snps[d_sequences_ptr[idx].start + i];
 
                         bqsrTableKey key1(qual, 0, readGrpCov);
                         auto idx1 = static_cast<int32_t>(d_table_accessor.getQualityScoresIdx(key1));
@@ -622,8 +624,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
                         d_cycle_table_vals[output_i] = errVal;
 
 
-                        if (d_base_context_ptr[idx].len > 0 && d_base_context[output_i] >= 0) {
-                            bqsrTableKey key3(qual, d_base_context[output_i], readGrpCov);
+                        if (d_base_context_ptr[idx].len > 0 && d_base_context[d_base_context_ptr[idx].start + i] >= 0) {
+                            bqsrTableKey key3(qual, d_base_context[d_base_context_ptr[idx].start + i], readGrpCov);
                             auto idx3 = static_cast<int32_t>(d_table_accessor.getContextCovIdx(key3));
 
                             d_context_table_indexes[output_i] = idx3;

@@ -246,37 +246,27 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
         }
 
         if (carry.stage == Carry::ReadLen) {
-            int32_t* block = nullptr;
+            const unsigned char* p = carry.bin.empty()
+                    ? reinterpret_cast<const unsigned char*>(chunk.data())
+                    : reinterpret_cast<const unsigned char*>(carry.bin.data());
 
-            if (carry.bin.empty()) {
-                const unsigned char* p = reinterpret_cast<const unsigned char*>(chunk.data());
+            int32_t block_size = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
 
-                *block =  (int32_t)p[0]
-                       | (int32_t(p[1]) << 8)
-                       | (int32_t(p[2]) << 16)
-                       | (int32_t(p[3]) << 24);
-                //block = reinterpret_cast<int32_t*>(chunk.data());
-            } else {
-                carry.bin.append(chunk.data(), got);
-                block = reinterpret_cast<int32_t*>(carry.bin.data());
-            }
-
-            //std::memcpy(&raw_len, carry.bin.data(), sizeof(raw_len));
-
-
-            if ((*block) <= 0 || (*block) > (64 * 1024 * 1024)) {
+            if (block_size <= 0 || block_size > (64 * 1024 * 1024)) {
                 throw std::runtime_error("Invalid BAM block_size");
             }
 
-            carry.block = *block;
-            carry.need  = carry.block;
+            carry.block = block_size;
+            carry.need  = block_size;
             carry.stage = Carry::ReadBody;
 
-            if (*block > carry.max_block_seen) {
-                carry.max_block_seen = *block;
-                carry.bin.reserve(*block);  // grow once, then reuse this capacity forever
+            // Reserve capacity once when we see a new maximum, but don't reserve every time
+            if (block_size > carry.max_block_seen) {
+                carry.max_block_seen = block_size;
+                carry.bin.reserve(block_size);
             }
-            carry.bin.clear();
+
+            carry.bin.clear();  // Clear for next ReadBody stage
             continue;
         }
 

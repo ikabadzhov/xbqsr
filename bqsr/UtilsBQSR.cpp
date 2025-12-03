@@ -100,7 +100,7 @@ int32_t deviceCalculateHardSoftOffset(CigarOperation* cigar, SpanField& cigar_pt
     return size;
 }
 
-// Clips in-place (your existing in-place routine), then POS shift if clipping is left-side.
+// Clips in-place then POS shift if clipping is left-side.
 inline void deviceHardClip(
     CigarOperation* cigar_buf, SpanField& cigar_ptr,
     SpanField& sequencePtrs, SpanField& qualPtrs,

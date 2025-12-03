@@ -246,25 +246,37 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
         }
 
         if (carry.stage == Carry::ReadLen) {
-            int32_t raw_len = 0;
-            carry.bin.append(chunk.data(), got);
-            std::memcpy(&raw_len, carry.bin.data(), sizeof(raw_len));
-            carry.bin.clear();
-            const int32_t block = raw_len;
+            int32_t* block = nullptr;
 
-            if (block <= 0 || block > (64 * 1024 * 1024)) {
+            if (carry.bin.empty()) {
+                const unsigned char* p = reinterpret_cast<const unsigned char*>(chunk.data());
+
+                *block =  (int32_t)p[0]
+                       | (int32_t(p[1]) << 8)
+                       | (int32_t(p[2]) << 16)
+                       | (int32_t(p[3]) << 24);
+                //block = reinterpret_cast<int32_t*>(chunk.data());
+            } else {
+                carry.bin.append(chunk.data(), got);
+                block = reinterpret_cast<int32_t*>(carry.bin.data());
+            }
+
+            //std::memcpy(&raw_len, carry.bin.data(), sizeof(raw_len));
+
+
+            if ((*block) <= 0 || (*block) > (64 * 1024 * 1024)) {
                 throw std::runtime_error("Invalid BAM block_size");
             }
 
-            carry.block = block;
+            carry.block = *block;
             carry.need  = carry.block;
             carry.stage = Carry::ReadBody;
 
-            if (block > carry.max_block_seen) {
-                carry.max_block_seen = block;
-                carry.bin.reserve(block);  // grow once, then reuse this capacity forever
+            if (*block > carry.max_block_seen) {
+                carry.max_block_seen = *block;
+                carry.bin.reserve(*block);  // grow once, then reuse this capacity forever
             }
-
+            carry.bin.clear();
             continue;
         }
 
@@ -508,8 +520,8 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
             current_batch.SetAlnsNum(alnsRead);
             //current_batch->EnsureCapacity(alnsRead);
             //current_batch->Resize(alnsRead);
-            on_batch(std::move(current_batch));                 // > > > emit immediately
-            current_batch = get_batch();//SamAlignments(header);              // new empty batch
+            on_batch(std::move(current_batch));
+            current_batch = get_batch();
             current_batch.SetAlnsNum(0);
             alnsRead = 0;
         }

@@ -100,6 +100,8 @@ public:
     }
 
     void report(std::ostream& os = std::cout) const {
+#ifdef ALLOW_TIME_PROFILER
+
         os << "\n=== BQSR Profiler Report ===\n";
         os << std::left << std::setw(24) << "Stage" << std::right << std::setw(14) << "Time (sec)\n";
         os << "----------------------------------------------\n";
@@ -109,5 +111,6 @@ public:
                << (double) stages_[i].acc_ns / 1e9 << "\n";
         }
         os << "==============================================\n";
+#endif
     }
 };

@@ -8,7 +8,7 @@
 
 // Turn profiling on/off globally
 #ifndef ENABLE_IO_PROFILER
-#define ENABLE_IO_PROFILER 1
+#define ENABLE_IO_PROFILER 0
 #endif
 
 enum class IOStageId : std::size_t {
@@ -105,6 +105,7 @@ public:
 
     //-------------- REPORT ---------------------------------
     void report(std::ostream& os = std::cout) const {
+#if ENABLE_IO_PROFILER
         os << "\n=== IO Profiler Report ===\n";
         os << std::left << std::setw(24) << "Stage"
            << std::right << std::setw(14) << "Time (sec)\n";
@@ -119,6 +120,7 @@ public:
         }
 
         os << "==============================================\n";
+#endif
     }
 };
 

@@ -9,12 +9,15 @@
 #include <memory>
 #include "../../sam_data_structures/SamHeader.h"
 #include "../../sam_data_structures/SamAlignments.h"
+#include "../bam_io/BaiReader.h"
 #include "../streams/InputStream.h"
 #include "../streams/OutputStream.h"
 
 class AlignmentReader {
 protected:
     std::unique_ptr<InputStream> in; //TODO: Lets start with file only, then move to generic input source: file and/or stdin
+    VOff end_voff_ = 0;
+    bool has_end_  = false;
 
 public:
     explicit AlignmentReader(std::unique_ptr<InputStream> inStream) : in(std::move(inStream)) {};
@@ -27,6 +30,7 @@ public:
     bool isEOF();
     bool Good(); // Check the internal states of the stream
     bool Bad(); // It's not the opposite of good;
+    virtual void SeekVirtual(VOff vstart, VOff vend) = 0;
 };
 
 class AlignmentWriter {

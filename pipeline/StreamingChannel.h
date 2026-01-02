@@ -10,12 +10,22 @@ class BoundedChannel {
 public:
     explicit BoundedChannel(size_t capacity) : capacity_(capacity) {}
 
-    void push(T v) {
+    bool push(T&& v) {
         std::unique_lock lk(m_);
         cv_not_full_.wait(lk, [&]{ return closed_ || q_.size() < capacity_; });
-        if (closed_) throw std::runtime_error("Channel closed");
+        if (closed_) return false;
         q_.emplace_back(std::move(v));
         cv_not_empty_.notify_one();
+        return true;
+    }
+
+    bool try_push(T&& v) {
+        std::lock_guard lk(m_);
+        if (closed_) return false;
+        if (q_.size() >= capacity_) return false;
+        q_.emplace_back(std::move(v));
+        cv_not_empty_.notify_one();
+        return true;
     }
 
     std::optional<T> pop() {

@@ -21,6 +21,7 @@
 #include <sycl/sycl.hpp>
 
 #include "device/batch.h"
+#include "input_output/bam_io/BaiReader.h"
 #include "logger/Logger.h"
 #include "sycl_parallel_library/intervalsmove/intervalmove.h"
 #include "sycl_parallel_library/scan/scan.h"
@@ -111,11 +112,28 @@ int main(int argc, char **argv) {
     std::vector<StreamingEngine::Stage> stages;
     std::vector<StreamingEngine::FinalizeFn> finals;
 
-    std::shared_ptr<AlignmentReader> alignmentReader = AlignmentReaderFactory::open(args.input_bam);
+    size_t n_producers = 2;
+    const std::string bai_path = find_bai_path(args.input_bam);
+    auto bai = load_bai_linear(bai_path);
+    std::vector<std::pair<VOff,VOff>> ranges =
+    split_ranges_equal_by_compressed_span(bai.ioffsets, n_producers);
+
+    std::vector<std::shared_ptr<AlignmentReader>> alignmentReader(n_producers);
+    std::shared_ptr<AlignmentReader> alignmentForHeader = AlignmentReaderFactory::open(args.input_bam);
+
+    tbb::parallel_for (0UL, n_producers,[&] (size_t i) {
+        alignmentReader[i] = AlignmentReaderFactory::open(args.input_bam);
+        alignmentReader[i]->SeekVirtual(ranges[i].first, ranges[i].second);
+    });
+
     std::shared_ptr<AlignmentWriter> alignmentWriter;
 
     std::shared_ptr<Header> header = std::make_shared<Header>();
-    alignmentReader->ParseHeader(*header);
+    alignmentForHeader->ParseHeader(*header);
+    alignmentForHeader.reset();
+
+    BaiLinearIndex baiLinearIndex = load_bai_linear(bai_path);
+
     header->buildReadGroupCovariateIndex();
 
     BQSRTableConfig bqsrTableConfig(header->getReadGroupCovariates().size(), bqsr::defaults::MAX_QUALITY_SCORE, bqsr::defaults::MAX_CYCLE, bqsr::defaults::CONTEXT_LEN);
@@ -140,13 +158,13 @@ int main(int argc, char **argv) {
 
         // Stage 1: Recalibrate (no output here)
         stages.emplace_back("BQSR-Recalibrate", [recal = bqsrRecal](SamAlignments& batch){
-            recal->Recalibrate(batch);
+            //recal->Recalibrate(batch);
         });
         // Finalize: Print tables at the end of all batch processing
         finals.emplace_back([&, recal = bqsrRecal, table = tables]{
-            recal->exportTables(*table);
-            table->FinalizeBQSRTables();
-            table->PrintBQSRTables(args.recal_table, *header);
+            //recal->exportTables(*table);
+            //table->FinalizeBQSRTables();
+            //table->PrintBQSRTables(args.recal_table, *header);
         });
     }
 
@@ -189,7 +207,7 @@ int main(int argc, char **argv) {
     t.reset();
     StreamingEngine engine(cfg, (std::move(stages)), (std::move(finals)));
 
-    engine.run_streaming(*alignmentReader, header);
+    engine.run_streaming(alignmentReader, header);
     //t.elapsed();
     Logger::getLogger().log(LOG_INFO, "Time to run all stages: " + std::to_string(t.elapsed()) + " sec");
     ProfilerIO::instance().report();

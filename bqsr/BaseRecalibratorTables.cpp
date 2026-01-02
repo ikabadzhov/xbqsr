@@ -38,7 +38,7 @@ void BaseRecalibratorTables::initializeDeviceMemory() {
 
     size_t constant_memory = nReadGroups * nQualScore * nCycleCov * (nContextCov+1) * sizeof(int);
     size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_memory - 515 * 1024 * 1024;
-    config.max_memory = available_mem / 2;
+    config.max_memory = available_mem / 3;
 
     batch_process = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
     batch_transfer = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);

@@ -196,6 +196,7 @@ add_executable(bqsr
 		data_types/StringDictionary.h
 		data_types/FlatHashMap.h
 		data_types/TransparentStringTypes.h
+		input_output/bam_io/BaiReader.h
 )
 
 # ------------------------------------------------------------------------------

@@ -63,7 +63,12 @@ public:
     bool eof() override;
     void close() override;
 
-    private:
+    void seek_virtual(uint64_t voff);
+    void set_virtual_end(uint64_t voff);
+
+    void clear_virtual_end();
+
+private:
     // ------------ Helpers & state ------------
 
     static inline uint16_t le16_(const uint8_t* p) {
@@ -96,6 +101,12 @@ private:
     uint64_t  comp_off_;
     uint64_t  decomp_off_;
     bool      seen_eof_block_;
+
+    uint64_t end_coff_;
+    uint64_t end_uoff_;
+
+    bool seen_end_ = false; // logical end (end_coff/end_uoff) reached
+    bool has_end_  = false; // end bounds are valid (or use end_coff != UINT64_MAX)
 
     // Decompressed stash
     std::vector<uint8_t> stash_;

@@ -2,6 +2,7 @@
 #define GENOMICPIPELINE_BAMREADER_H
 
 
+#include "BaiReader.h"
 #include "../alignment_io/AlignmentIO.h"
 #include "../../zlib.h"
 #include "../streams/CompressedInputStream.h"
@@ -26,6 +27,7 @@ public:
     void Close() override;
     void ParseAlignmentStreamed(std::shared_ptr<Header> header, std::function<SamAlignments()> get_batch,
                                         std::function<void(SamAlignments&&)> on_batch) override;
+    void SeekVirtual(VOff voff_start, VOff voff_end) override;
 };
 
 

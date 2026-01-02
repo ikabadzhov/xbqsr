@@ -534,6 +534,14 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     // loader.join(); // No need with jthread
 }
 
+void BamReader::SeekVirtual(VOff voff_start, VOff voff_end) {
+    auto* cis = dynamic_cast<CompressedInputStream*>(in.get());
+    if (!cis) throw std::runtime_error("SeekVirtual requires CompressedInputStream (BGZF)");
+    cis->seek_virtual(voff_start);
+    cis->set_virtual_end(voff_end);
+    header_done_ = true;
+}
+
 std::string_view BamReader::getslice(size_t numBytesToRead, size_t &numBytesRead) {
     return buffer.getslice(numBytesToRead, numBytesRead);
 }

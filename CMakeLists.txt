@@ -197,6 +197,8 @@ add_executable(bqsr
 		data_types/FlatHashMap.h
 		data_types/TransparentStringTypes.h
 		input_output/bam_io/BaiReader.h
+		pipeline/BQSRRecalExecutor.h
+		pipeline/IExecutor.h
 )
 
 # ------------------------------------------------------------------------------

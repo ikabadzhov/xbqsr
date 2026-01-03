@@ -45,11 +45,6 @@ void BaseRecalibratorTables::initializeDeviceMemory() {
 }
 
 
-// assumes you have something like:
-// RecalibrationTable& qualityScores(); // returns an object that has .table (std::vector<bqsrEntry>) or similar
-// const RecalibrationTable& qualityScores() const;
-// same for cycles() and contexts()
-
 void BaseRecalibratorTables::merge(const BaseRecalibratorTables& other) {
     // 1. sanity: sizes must match
     const auto qs_size = qualityScores().size();

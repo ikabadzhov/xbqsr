@@ -10,13 +10,15 @@
 #include <memory>
 #include <string>
 
+#include "IExecutor.h"
 #include "StreamingChannel.h"
 #include "../sam_data_structures/SamAlignments.h"
+
 
 class StreamingEngine {
 public:
     using Batch      = SamAlignments;
-    using StageFn    = std::function<void(Batch&)>;
+    using StageFn    = std::function<void(Batch&, size_t worker_id)>;
     using FinalizeFn = std::function<void()>;
     using clock      = std::chrono::steady_clock;
 
@@ -69,22 +71,26 @@ public:
 
     // ReaderT is assumed pointer-like: readers[pid]->ParseAlignmentStreamed(...)
     template<class ReaderT>
-    void run_streaming(std::vector<ReaderT>& readers, std::shared_ptr<Header> hdr) {
+    void run_streaming(std::vector<ReaderT>& readers,
+                       std::vector<std::unique_ptr<IExecutor>>& executors,
+                       std::shared_ptr<Header> hdr)
+    {
         const size_t P = readers.size();
-        const size_t W = cfg_.workers;
+        const size_t W = executors.size();
+        if (W == 0) throw std::runtime_error("run_streaming: executors is empty");
+        if (P == 0) throw std::runtime_error("run_streaming: readers is empty");
+
         const size_t C = cfg_.channel_capacity;
         const size_t pool_sz = C + P + W;
 
         // Local fixed-size pool queue for this run.
         BoundedChannel<Batch> free_chan(pool_sz);
 
-        // Prefill exactly pool_sz buffers (won't block).
         for (size_t i = 0; i < pool_sz; ++i) {
-            const bool ok = free_chan.push(Batch(hdr));
-            if (!ok) throw std::runtime_error("free pool closed during prefill");
+            if (!free_chan.push(Batch(hdr)))
+                throw std::runtime_error("free pool closed during prefill");
         }
 
-        // Reset errors for this run
         prod_ex_ = nullptr;
         cons_ex_ = nullptr;
 
@@ -99,17 +105,26 @@ public:
 
         std::atomic<int> producers_left{ (int)P };
 
-        // Stats (optional)
-        std::atomic<long long> producer_ns_total_atomic{0};
-        std::atomic<long long> producer_batches_atomic{0};
+        // ---- wall-clock timestamps (ns since steady epoch) ----
+        std::vector<std::atomic<long long>> prod_start_ns(P), prod_end_ns(P);
+        std::vector<std::atomic<long long>> work_start_ns(W), work_end_ns(W);
+        for (size_t i = 0; i < P; ++i) { prod_start_ns[i] = 0; prod_end_ns[i] = 0; }
+        for (size_t i = 0; i < W; ++i) { work_start_ns[i] = 0; work_end_ns[i] = 0; }
 
-        // --- Consumers first ---
+        auto now_ns = []() -> long long {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now().time_since_epoch()).count();
+        };
+
+        // ---- Consumers (one per executor) ----
         workers_.clear();
         workers_.reserve(W);
 
         for (size_t wi = 0; wi < W; ++wi) {
             workers_.emplace_back([&, wi](std::stop_token st) {
                 try {
+                    work_start_ns[wi].store(now_ns(), std::memory_order_relaxed);
+
                     for (;;) {
                         if (st.stop_requested()) { shutdown_all(); break; }
 
@@ -118,18 +133,17 @@ public:
 
                         Batch batch = std::move(*item);
 
-                        for (auto& s : stages_) {
-                            const auto t0 = clock::now();
-                            s.fn(batch);
-                            const auto t1 = clock::now();
-                            const auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-                            s.ns_total.fetch_add(dt, std::memory_order_relaxed);
-                            s.calls.fetch_add(1, std::memory_order_relaxed);
-                        }
+                        // Generic device-local processing
+                        executors[wi]->Process(batch);
 
-                        // CRITICAL: never block returning to pool (prevents circular deadlock).
-                        (void)free_chan.try_push(std::move(batch)); // drop if full/closed (shouldn't happen)
+                        // Never block returning to pool (avoid deadlocks)
+                        (void)free_chan.try_push(std::move(batch));
                     }
+
+                    // Make sure executor flushes device work before we stop timing
+                    executors[wi]->Finalize();
+
+                    work_end_ns[wi].store(now_ns(), std::memory_order_relaxed);
                 } catch (...) {
                     cons_ex_ = std::current_exception();
                     shutdown_all();
@@ -137,46 +151,35 @@ public:
             });
         }
 
-        // --- Producers ---
+        // ---- Producers ----
         std::vector<std::jthread> producers;
         producers.reserve(P);
 
         for (size_t pid = 0; pid < P; ++pid) {
             producers.emplace_back([&, pid](std::stop_token st) {
                 try {
-                    auto t_prev = clock::now();
+                    prod_start_ns[pid].store(now_ns(), std::memory_order_relaxed);
 
                     readers[pid]->ParseAlignmentStreamed(
                         hdr,
-                        // Acquire a buffer from pool (blocking).
                         [&]() -> Batch {
                             if (st.stop_requested()) { shutdown_all(); throw std::runtime_error("producer stopped"); }
-                            auto b = free_chan.pop();  // nullopt if closed & drained
+                            auto b = free_chan.pop();
                             if (!b) { shutdown_all(); throw std::runtime_error("free pool closed"); }
                             return std::move(*b);
                         },
-                        // Emit to bounded work queue (blocking backpressure).
                         [&](Batch&& b) {
                             if (st.stop_requested()) { shutdown_all(); return; }
-
-                            const auto t_now = clock::now();
-                            const auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>(t_now - t_prev).count();
-                            producer_ns_total_atomic.fetch_add(dt, std::memory_order_relaxed);
-                            producer_batches_atomic.fetch_add(1, std::memory_order_relaxed);
-                            t_prev = t_now;
-
-                            if (!chan_.push(std::move(b))) {
-                                shutdown_all();
-                                return;
-                            }
+                            if (!chan_.push(std::move(b))) { shutdown_all(); return; }
                         }
                     );
+
+                    prod_end_ns[pid].store(now_ns(), std::memory_order_relaxed);
                 } catch (...) {
                     if (!prod_ex_) prod_ex_ = std::current_exception();
                     shutdown_all();
                 }
 
-                // Last producer closes work queue so consumers exit.
                 if (producers_left.fetch_sub(1, std::memory_order_acq_rel) == 1) {
                     chan_.close();
                     free_chan.close();
@@ -184,43 +187,50 @@ public:
             });
         }
 
-        // --- join ---
         for (auto& p : producers) p.join();
         for (auto& w : workers_) w.join();
         workers_.clear();
 
-        // --- propagate errors ---
         if (prod_ex_) std::rethrow_exception(prod_ex_);
         if (cons_ex_) std::rethrow_exception(cons_ex_);
 
-        // --- finalizers ---
         for (auto& f : finalizers_) f();
 
-        // --- print stats ---
-        const double total_s = (producer_ns_total_atomic.load(std::memory_order_relaxed) / 1e9) / producers.size();
-        const auto   n_batches = producer_batches_atomic.load(std::memory_order_relaxed);
-        const double avg_s = n_batches ? (total_s / n_batches) : 0.0;
+        // ---- wall-clock totals ----
+        auto min_nonzero = [](const auto& v) -> long long {
+            long long m = 0;
+            for (auto& a : v) {
+                long long x = a.load(std::memory_order_relaxed);
+                if (x == 0) continue;
+                if (m == 0 || x < m) m = x;
+            }
+            return m;
+        };
+        auto max_val = [](const auto& v) -> long long {
+            long long m = 0;
+            for (auto& a : v) {
+                long long x = a.load(std::memory_order_relaxed);
+                if (x > m) m = x;
+            }
+            return m;
+        };
 
-        std::fprintf(stderr,
-                     "[Streaming] %-20s: %10.3f sec total  (%8lld batches, avg %7.3f sec)\n",
-                     "Read BAM (Avg Across Producers)", total_s, (long long)n_batches, avg_s);
+        const long long read_t0  = min_nonzero(prod_start_ns);
+        const long long read_t1  = max_val(prod_end_ns);
+        const long long comp_t0  = min_nonzero(work_start_ns);
+        const long long comp_t1  = max_val(work_end_ns);
 
-        for (auto& s : stages_) {
-            const auto ns  = s.ns_total.load(std::memory_order_relaxed);
-            const auto n   = s.calls.load(std::memory_order_relaxed);
-            const double sec = ns / 1e9;
-            const double avg_sec = n ? (sec / n) : 0.0;
-            std::fprintf(stderr,
-                         "[Streaming] %-20s (Avg Across Workers): %10.3f sec total  (%8lld calls, avg %7.3f sec)\n",
-                         s.name.c_str(), sec, (long long)n, avg_sec);
-        }
+        const double read_wall_s = (read_t1 > read_t0) ? double(read_t1 - read_t0) / 1e9 : 0.0;
+        const double comp_wall_s = (comp_t1 > comp_t0) ? double(comp_t1 - comp_t0) / 1e9 : 0.0;
+
+        std::fprintf(stderr, "[Streaming] Read wall-clock   : %10.3f sec (min start -> max end)\n", read_wall_s);
+        std::fprintf(stderr, "[Streaming] Compute wall-clock : %10.3f sec (min start -> max end)\n", comp_wall_s);
     }
-
     template<class ReaderT>
     void run_streaming_serial(ReaderT& reader, std::shared_ptr<Header> hdr) {
         reader.ParseAlignmentStreamed(hdr, [&](Batch&& b){
             Batch batch = std::move(b);
-            for (auto& s : stages_) s.fn(batch);
+            for (auto& s : stages_); //s.fn(batch);
         });
         for (auto& f : finalizers_) f();
     }

@@ -23,6 +23,7 @@
 #include "device/batch.h"
 #include "input_output/bam_io/BaiReader.h"
 #include "logger/Logger.h"
+#include "pipeline/BQSRRecalExecutor.h"
 #include "sycl_parallel_library/intervalsmove/intervalmove.h"
 #include "sycl_parallel_library/scan/scan.h"
 #include "sycl_parallel_library/segmented_reduce/segreduce.h"
@@ -74,7 +75,7 @@ int main(int argc, char **argv) {
     std::vector<int> selected_devices;
     if (args.gpu_use_all) {
         // Use all available devices
-        for (size_t i = 0; i < gpus.size(); ++i) {
+        for (size_t i = 2; i < gpus.size(); ++i) {
             selected_devices.push_back(static_cast<int>(i));
         }
     } else {
@@ -112,7 +113,7 @@ int main(int argc, char **argv) {
     std::vector<StreamingEngine::Stage> stages;
     std::vector<StreamingEngine::FinalizeFn> finals;
 
-    size_t n_producers = 2;
+    size_t n_producers = 4;
     const std::string bai_path = find_bai_path(args.input_bam);
     auto bai = load_bai_linear(bai_path);
     std::vector<std::pair<VOff,VOff>> ranges =
@@ -148,30 +149,57 @@ int main(int argc, char **argv) {
         auto addREFID = Filter::AddREFID(batch);
         for (size_t i = 0; i < batch.GetAlnsNum(); ++i) addREFID(batch, i);
     });*/
+    std::vector<std::unique_ptr<IExecutor>> executors;
 
     if (args.is_recalibrate()) {
+
         referenceGenome = std::make_unique<MappedFasta>(args.reference, header);
         knownSites = std::make_unique<KnownSites>(args.known_sites, header);
-        tables = std::make_shared<BaseRecalibratorTables>(bqsrTableConfig, queue);
+
+        executors.reserve(selected_devices.size());
+
+        for (int dev_idx : selected_devices) {
+            sycl::device dev = gpus[dev_idx];
+            executors.emplace_back(
+                std::make_unique<BQSRRecalExecutor>(
+                    dev, bqsrTableConfig, *referenceGenome, *knownSites, *header
+                )
+            );
+        }
+
+        /*tables = std::make_shared<BaseRecalibratorTables>(bqsrTableConfig, queue);
         bqsrRecal = std::make_shared<BaseRecalibrator>(*referenceGenome, *knownSites, queue, *header, *tables);
         bqsrRecal->initializeDeviceMemory();
-
+*/
         // Stage 1: Recalibrate (no output here)
-        stages.emplace_back("BQSR-Recalibrate", [recal = bqsrRecal](SamAlignments& batch){
+        stages.emplace_back("BQSR-Recalibrate", [&executors](SamAlignments& batch, size_t wid){
             //recal->Recalibrate(batch);
+            executors[wid]->Process(batch);
         });
         // Finalize: Print tables at the end of all batch processing
-        finals.emplace_back([&, recal = bqsrRecal, table = tables]{
+        finals.emplace_back([&] {
+            for (int i = 0; i < executors.size(); i++) {
+                executors[i]->Finalize();
+            }
+            auto* bqsrExecMain = dynamic_cast<BQSRRecalExecutor*>(executors[0].get());
+            if (!bqsrExecMain) throw std::runtime_error("executor[0] is not BQSRRecalExecutor");
+
+            for (int i = 1; i < executors.size(); i++) {
+                auto* bqsrExec = dynamic_cast<BQSRRecalExecutor*>(executors[i].get());
+                if (!bqsrExec) throw std::runtime_error("executor["+std::to_string(i)+"] is not BQSRRecalExecutor");
+                bqsrExecMain->Tables().merge(bqsrExec->Tables());
+            }
             //recal->exportTables(*table);
-            //table->FinalizeBQSRTables();
-            //table->PrintBQSRTables(args.recal_table, *header);
+
+            bqsrExecMain->Tables().FinalizeBQSRTables();
+            bqsrExecMain->Tables().PrintBQSRTables(args.recal_table, *header);
         });
     }
 
     int quantize_level = 0;
     std::vector<uint8_t> sqqList;
 
-    if (args.is_apply()) {
+    /*if (args.is_apply()) {
         tables = std::make_unique<BaseRecalibratorTables>(bqsrTableConfig, queue);
         tables->initializeDeviceMemory();
         tables->LoadFromReport(args.recal_table, *header);
@@ -197,17 +225,22 @@ int main(int argc, char **argv) {
                 throw std::runtime_error("Error while closing output file");
             }
         });
-    }
+    }*/
 
     // Build and run engine
     StreamingEngine::Config cfg;
     cfg.channel_capacity = 4;
-    cfg.workers = 1;
+    cfg.workers = executors.size();
+
+    if (executors.empty()) {
+        throw std::runtime_error("No executors created (workers would be 0)");
+    }
+
     Timer t;
     t.reset();
     StreamingEngine engine(cfg, (std::move(stages)), (std::move(finals)));
 
-    engine.run_streaming(alignmentReader, header);
+    engine.run_streaming(alignmentReader, executors, header);
     //t.elapsed();
     Logger::getLogger().log(LOG_INFO, "Time to run all stages: " + std::to_string(t.elapsed()) + " sec");
     ProfilerIO::instance().report();

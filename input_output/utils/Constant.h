@@ -5,7 +5,7 @@
 #include <cstdint>
 
 
-const ssize_t DEFAULT_BUFFER_SIZE = 512 * (1UL << 20) - 1;
+const ssize_t DEFAULT_BUFFER_SIZE = 1024 * 1024 * 1024;
 static const ssize_t DEFAULT_NUM_ALIGNMENTS = 10*(1UL << 20);
 
 // Practical defaults for short-read workloads

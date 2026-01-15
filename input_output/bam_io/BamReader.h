@@ -16,6 +16,8 @@ class BamReader : public AlignmentReader {
     BufferReader buffer;
     std::string_view getslice(size_t numBytesToRead, size_t &numBytesRead);
     bool header_done_ = false;
+    int32_t nextSlice = 0;
+    std::vector<std::pair<VOff, VOff>> slices_;
 
 public:
     explicit BamReader(std::unique_ptr<InputStream> inputStream, ssize_t buffSz = DEFAULT_BUFFER_SIZE) : AlignmentReader(std::move(inputStream)),
@@ -28,6 +30,8 @@ public:
     void ParseAlignmentStreamed(std::shared_ptr<Header> header, std::function<SamAlignments()> get_batch,
                                         std::function<void(SamAlignments&&)> on_batch) override;
     void SeekVirtual(VOff voff_start, VOff voff_end) override;
+
+    void SetSlices(std::vector<std::pair<VOff, VOff>>&& slices);
 };
 
 

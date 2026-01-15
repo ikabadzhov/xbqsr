@@ -170,6 +170,7 @@ void BamReader::ParseHeader(Header &hdr) {
     header_done_ = true;
 }
 
+//[[clang::optnone]]
 static void load_batch(const std::shared_ptr<InputBatchBam> &bt, std::unique_ptr<InputStream> &in) {
     //auto& profiler = ProfilerIO::instance();
     //profiler.start(IOStageId::DataLoading);
@@ -213,6 +214,8 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
                           BatchTmpVector& scratch) {
     IO_PROFILE_SCOPE(ProcessBatch);
 
+
+
     auto& buf        = bp->buffer;
     auto& boundaries = scratch.boundaries;
 
@@ -238,6 +241,10 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
         if (got == 0) break;
 
         carry.need -= static_cast<int32_t>(got);
+        // If we were already accumulating (spanning case) and just finished, append final bytes now.
+        if (!carry.bin.empty() && carry.need == 0) {
+            carry.bin.append(chunk.data(), got);
+        }
 
         if (carry.need > 0) {
             // Still in ReadLen/ReadBody state: accumulate partial data and bail to loader
@@ -461,6 +468,12 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     size_t alnsRead    = 0;
     bool   first_batch = true;
 
+    if(nextSlice >= slices_.size()){
+        return;
+    }
+    SeekVirtual(slices_[nextSlice].first, slices_[nextSlice].second);
+    nextSlice++;
+
     // Preload first batch
     load_batch(batch_process, in);
 
@@ -477,9 +490,11 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
                 if (st.stop_requested() || stop) break;
                 ready = false;
                 lk.unlock();
-
-                load_batch(batch_transfer, in);
-
+                if (nextSlice < slices_.size()) {
+                    SeekVirtual(slices_[nextSlice].first, slices_[nextSlice].second);
+                    nextSlice++;
+                    load_batch(batch_transfer, in);
+                }
                 lk.lock();
                 done = true;
                 lk.unlock();
@@ -537,8 +552,17 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
 void BamReader::SeekVirtual(VOff voff_start, VOff voff_end) {
     auto* cis = dynamic_cast<CompressedInputStream*>(in.get());
     if (!cis) throw std::runtime_error("SeekVirtual requires CompressedInputStream (BGZF)");
-    cis->seek_virtual(voff_start);
+    VOff slice_beg = slices_[nextSlice].first;
+    VOff slice_end = slices_[nextSlice].second;
+
+    std::cout << "[Slice " << nextSlice << "] beg coff=" << voff_coff(slice_beg)
+          << " uoff=" << voff_uoff(slice_beg)
+          << " end coff=" << voff_coff(slice_end)
+          << " uoff=" << voff_uoff(slice_end)
+          << std::endl;
+
     cis->set_virtual_end(voff_end);
+    cis->seek_virtual(voff_start);
     header_done_ = true;
 }
 
@@ -546,3 +570,7 @@ std::string_view BamReader::getslice(size_t numBytesToRead, size_t &numBytesRead
     return buffer.getslice(numBytesToRead, numBytesRead);
 }
 
+
+void BamReader::SetSlices(std::vector<std::pair<VOff, VOff>>&& slices) {
+    slices_ = slices;
+}

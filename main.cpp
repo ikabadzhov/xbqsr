@@ -5,6 +5,7 @@
 #include <tbb/parallel_sort.h>
 #include "Utils.h"
 #include "input_output/alignment_io/AlignmentIO.h"
+#include "input_output/bam_io/BamReader.h"
 #include "sam_data_structures/SamHeader.h"
 #include "filters/Filter.h"
 #include "file_format/MappedFasta.h"
@@ -32,6 +33,13 @@
 
 using namespace std;
 using namespace chrono;
+
+static inline int32_t le_i32(const uint8_t* p) {
+    return int32_t(uint32_t(p[0]) |
+                   (uint32_t(p[1]) << 8) |
+                   (uint32_t(p[2]) << 16) |
+                   (uint32_t(p[3]) << 24));
+}
 
 system_clock::time_point now() {
     return std::chrono::high_resolution_clock::now();
@@ -113,18 +121,81 @@ int main(int argc, char **argv) {
     std::vector<StreamingEngine::Stage> stages;
     std::vector<StreamingEngine::FinalizeFn> finals;
 
-    size_t n_producers = 4;
+    size_t n_producers = selected_devices.size();
     const std::string bai_path = find_bai_path(args.input_bam);
     auto bai = load_bai_linear(bai_path);
     std::vector<std::pair<VOff,VOff>> ranges =
-    split_ranges_equal_by_compressed_span(bai.ioffsets, n_producers);
+    split_ranges_equal_by_compressed_span(bai.ioffsets, 512UL*1024*1024);
+    print_ranges_estimated_decompressed_over(args.input_bam, ranges);
+
+    /* CompressedInputStream cis(args.input_bam);
+
+    //const size_t n = (max_to_check == 0) ? slices.size() : std::min(slices.size(), max_to_check);
+
+    for (size_t i = 0; i < ranges.size(); ++i) {
+    const uint64_t beg = ranges[i].first;
+    const uint64_t end = ranges[i].second;
+
+    try {
+        cis.set_virtual_end(end);
+        cis.seek_virtual(beg);
+
+        // Read the first 1 MiB of *decompressed* data from this slice
+        const size_t probe_size = 1 << 20; // 1 MiB
+        std::string buf(probe_size, '\0');
+
+        const ssize_t got = cis.read(buf, 0, probe_size);
+        if (got < 4) {
+            std::ostringstream oss;
+            oss << "Slice too small to contain a BAM record header (got=" << got << ")"
+                << " at slice#" << i
+                << " beg=(" << voff_coff(beg) << "," << voff_uoff(beg) << ")"
+                << " end=(" << voff_coff(end) << "," << voff_uoff(end) << ")";
+            throw std::runtime_error(oss.str());
+        }
+
+        const unsigned char* p =
+            reinterpret_cast<const unsigned char*>(buf.data());
+
+        const int32_t block_size =
+            int32_t(uint32_t(p[0]) |
+                    (uint32_t(p[1]) << 8) |
+                    (uint32_t(p[2]) << 16) |
+                    (uint32_t(p[3]) << 24));
+
+        if (block_size <= 0 || block_size > (64 * 1024 * 1024)) {
+            std::ostringstream oss;
+            oss << "Invalid BAM block_size=" << block_size
+                << " at slice#" << i
+                << " beg=(" << voff_coff(beg) << "," << voff_uoff(beg) << ")"
+                << " end=(" << voff_coff(end) << "," << voff_uoff(end) << ")";
+            throw std::runtime_error(oss.str());
+        }
+
+        std::cout << "[SliceCheck #" << i << "] ok: block_size=" << block_size
+                  << " beg=(" << voff_coff(beg) << "," << voff_uoff(beg) << ")"
+                  << " end=(" << voff_coff(end) << "," << voff_uoff(end) << ")"
+                  << "\n";
+    } catch (...) {
+        std::cerr << "[SliceCheck ERROR #" << i << "] "
+                  << "beg=(" << voff_coff(beg) << "," << voff_uoff(beg) << ") "
+                  << "end=(" << voff_coff(end) << "," << voff_uoff(end) << ")\n";
+        throw;
+    }
+    }*/
+
+    std::vector<std::vector<std::pair<VOff,VOff>>> slices(n_producers);
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        slices[i % n_producers].emplace_back(ranges[i].first, ranges[i].second);
+    }
 
     std::vector<std::shared_ptr<AlignmentReader>> alignmentReader(n_producers);
     std::shared_ptr<AlignmentReader> alignmentForHeader = AlignmentReaderFactory::open(args.input_bam);
 
     tbb::parallel_for (0UL, n_producers,[&] (size_t i) {
         alignmentReader[i] = AlignmentReaderFactory::open(args.input_bam);
-        alignmentReader[i]->SeekVirtual(ranges[i].first, ranges[i].second);
+        auto bam = dynamic_cast<BamReader*>(alignmentReader[i].get());
+        bam->SetSlices(std::move(slices[i]));
     });
 
     std::shared_ptr<AlignmentWriter> alignmentWriter;
@@ -144,11 +215,6 @@ int main(int argc, char **argv) {
     std::unique_ptr<KnownSites>  knownSites;
     std::shared_ptr<BaseRecalibrator> bqsrRecal;
 
-    // Stage 0: AddREFID filter
-    /*stages.emplace_back("AddREFID", [](SamAlignments& batch){
-        auto addREFID = Filter::AddREFID(batch);
-        for (size_t i = 0; i < batch.GetAlnsNum(); ++i) addREFID(batch, i);
-    });*/
     std::vector<std::unique_ptr<IExecutor>> executors;
 
     if (args.is_recalibrate()) {

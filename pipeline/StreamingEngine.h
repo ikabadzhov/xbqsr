@@ -99,7 +99,7 @@ public:
             bool expected = false;
             if (shutting_down.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                 chan_.close();
-                free_chan.close();
+                //free_chan.close();
             }
         };
 
@@ -182,13 +182,14 @@ public:
 
                 if (producers_left.fetch_sub(1, std::memory_order_acq_rel) == 1) {
                     chan_.close();
-                    free_chan.close();
+                    //free_chan.close();
                 }
             });
         }
 
         for (auto& p : producers) p.join();
         for (auto& w : workers_) w.join();
+        free_chan.close();
         workers_.clear();
 
         if (prod_ex_) std::rethrow_exception(prod_ex_);

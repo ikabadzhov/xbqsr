@@ -1,72 +1,66 @@
-#ifndef GENOMICPIPELINE_BAMWRITER_H
-#define GENOMICPIPELINE_BAMWRITER_H
-
+// BamWriter.h
+#pragma once
+#include <memory>
+#include <vector>
+#include <span>
+#include <mutex>
 #include <condition_variable>
+#include <stop_token>
+#include <thread>
+#include <exception>
+#include <atomic>
 
-#include "../alignment_io/AlignmentIO.h"
-#include "../streams/OutputStream.h"
-#include "../../input_output/streams/OutputStream.h"
-#include "../../sam_data_structures/SamHeader.h"
 #include "../parser/IOBatch.h"
-#include "../utils/Constant.h"
-#include <zlib.h>
+#include "../formatter/BamBatchFormatter.h"
+#include "../streams/OutputStream.h"
+#include "../alignment_io/AlignmentIO.h"
 
 
 class BamWriter : public AlignmentWriter {
 public:
-    // Construct with a concrete OutputStream (e.g., BGZFOutputStream)
-    BamWriter(std::unique_ptr<OutputStream> sink);
-    // disallow copying if not already
-    BamWriter(const BamWriter&) = delete;
-    BamWriter& operator=(const BamWriter&) = delete;
+    explicit BamWriter(std::unique_ptr<OutputStream> sink);
 
-    void FormatHeader(Header& hdr) override;
-    void FormatAlignment(std::vector<SamAlignments> &reads) override;
-
-    void BeginStreaming() override;
+    // Back-compatible API (same idea as your current implementation)
+    void FormatHeader(Header& hdr);
+    void BeginStreaming();
     void WriteAlignmentBatch(SamAlignments& block) override;
-    void EndStreaming() override;
 
-    void Close() override;
-    ~BamWriter() override;
+    void WriteFormattedBatchDirect(OutputBatchBam &batch) override;
+
+    void WriteFormattedBatch(OutputBatchBam& batch) override;
+    void EndStreaming();
+    void FormatAlignment(std::vector<SamAlignments>& blocks);
+    void Close();
+
+    ~BamWriter();
 
 private:
+    // Writes bytes from bt to out, then resets bt.
+    void store_batch_(const std::shared_ptr<OutputBatchBam>& bt, std::unique_ptr<OutputStream>& out);
 
-    static inline void push_u32(std::vector<uint8_t>& v, uint32_t x);
-    static inline void push_u16(std::vector<uint8_t>& v, uint16_t x);
-    static inline void push_u8 (std::vector<uint8_t>& v, uint8_t x);
+private:
+    std::unique_ptr<OutputStream> out_;
 
-    // --- persistent streaming state ---
+    // Formatting is now separated and reusable
+    BamBatchFormatter formatter_;
+    std::vector<uint8_t> header_buf_;
+
+    // Old behavior preserved
+    std::once_flag header_once_;
+    std::atomic<bool> header_written_{false};
+    bool streaming_started_{false};
+
+    // Writer thread state (double buffer)
     std::shared_ptr<OutputBatchBam> batch_process_;
     std::shared_ptr<OutputBatchBam> batch_transfer_;
 
-    bool have_work_ = false;
-    bool wrote_     = false;
-    bool stop_      = false;
-    bool streaming_started_ = false;
-
-    std::exception_ptr writer_ex_;
-    std::exception_ptr producer_ex_;
-
-
-    std::mutex m_;
-    //std::condition_variable cv_;
-    std::condition_variable_any cv_;
-
     std::jthread writer_thread_;
+    std::mutex m_;
+    std::condition_variable_any cv_;
+    bool have_work_{false};
+    bool wrote_{false};
+    bool stop_{false};
 
-    // helper to write one filled buffer to out_
-    static void store_batch_(const std::shared_ptr<OutputBatchBam>& bt,
-                             std::unique_ptr<OutputStream>& out);
-
-    std::unique_ptr<OutputStream> out_;
-    //bool header_written_ = false;
-
-    // scratch buffer reused per record
-    std::vector<uint8_t> recbuf_;
-
-    std::once_flag     header_once_;
-    std::atomic<bool>  header_written_{false};
+    std::exception_ptr writer_ex_{nullptr};
+    std::exception_ptr producer_ex_{nullptr};
 };
-
-#endif //GENOMICPIPELINE_BAMWRITER_H

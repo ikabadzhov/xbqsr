@@ -386,7 +386,7 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
 */
     // Process the current batch with your kernel
     batch_processing_variable_length<ComputeSkipSliceKernelData, ComputeSkipSliceConfiguration, SequencesInput, TablesOutput>(q_process_, q_transfer_, in, out, compute_skip_slice_kernel, config, batch_process, batch_transfer);
-    q_.wait();
+    q_.wait_and_throw();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 
     profiler.stop(StageId::RecalibrateBatches);

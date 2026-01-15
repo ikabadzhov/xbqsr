@@ -10,6 +10,7 @@
 #include "../../sam_data_structures/SamHeader.h"
 #include "../../sam_data_structures/SamAlignments.h"
 #include "../bam_io/BaiReader.h"
+#include "../formatter/BamBatchFormatter.h"
 #include "../streams/InputStream.h"
 #include "../streams/OutputStream.h"
 
@@ -42,6 +43,8 @@ public:
     virtual void FormatAlignment(std::vector<SamAlignments> &reads) = 0;
     virtual void BeginStreaming() = 0;
     virtual void WriteAlignmentBatch(SamAlignments& block) = 0;
+    virtual void WriteFormattedBatch(OutputBatchBam& block) = 0;
+    virtual void WriteFormattedBatchDirect(OutputBatchBam& block) = 0;
     virtual void EndStreaming() = 0;
     virtual void Close() = 0;
 

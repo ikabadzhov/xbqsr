@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Build types
 set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} -O3")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -O2")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -fno-omit-frame-pointer -O2")
 
 # --- oneAPI SYCL multi-backend flags ---
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
@@ -191,7 +191,7 @@ add_executable(bqsr
 		input_output/streams/BGZFOutputStream.h
 		bqsr/BaseRecalibratorTablesAccessor.cpp
 		bqsr/BaseRecalibratorTablesAccessor.h
-		pipeline/StreamingChannel.h
+		pipeline/BoundedChannel.h
 		pipeline/StreamingEngine.h
 		data_types/StringDictionary.h
 		data_types/FlatHashMap.h
@@ -199,6 +199,11 @@ add_executable(bqsr
 		input_output/bam_io/BaiReader.h
 		pipeline/BQSRRecalExecutor.h
 		pipeline/IExecutor.h
+        input_output/formatter/BamBatchFormatter.cpp
+		input_output/formatter/BamBatchFormatter.h
+		pipeline/AssociativeChannel.h
+		pipeline/UnboundedChannel.h
+		timer/TraceTimeline.h
 )
 
 # ------------------------------------------------------------------------------

@@ -39,11 +39,29 @@ public:
     // Reset to empty (caller will rewrite from offset 0)
     void reset() { used_ = 0; n_records_ = 0; }
 
+    // grow-only
+    void ensure_capacity(size_t cap) {
+        if (buf_.size() < cap) buf_.resize(cap);
+    }
+
+    ssize_t batch_id() {
+        return id_;
+    }
+
+    void set_batch_id(uint64_t id) {
+        id_ = id;
+    }
+
+    size_t n_records() {
+        return n_records_;
+    }
+
 private:
     std::vector<uint8_t> buf_;
     size_t capacity_{0};
     size_t used_{0};
     size_t n_records_{0};
+    ssize_t id_ = -1;
 };
 
 #endif //GENOMICPIPELINE_IOBATCH_H

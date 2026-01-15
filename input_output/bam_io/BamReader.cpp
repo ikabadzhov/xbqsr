@@ -8,6 +8,7 @@
 #include "../../timer/ProfilerIO.h"
 #include "../parser/SamHeaderParser.h"
 #include "../parser/BamAlignmentParser.h"
+#include "../../timer/TraceTimeline.h"
 
 void BamReader::Close() {
     this->in->close();
@@ -212,9 +213,8 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
                           size_t& alnsRead,
                           Carry& carry,
                           BatchTmpVector& scratch) {
+
     IO_PROFILE_SCOPE(ProcessBatch);
-
-
 
     auto& buf        = bp->buffer;
     auto& boundaries = scratch.boundaries;
@@ -340,9 +340,9 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
     fieldsOff.resize(nrecs);
     fieldsSizes.resize(nrecs + 1);  // +1 for scan sentinel
 
-    tbb::parallel_for(
-        0UL, nrecs,
-        [&boundaries, &reads, &fieldsOff, &fieldsSizes](size_t recIdx) {
+    for (size_t recIdx = 0; recIdx < nrecs; ++recIdx) {
+        //0UL, nrecs,
+        //[&boundaries, &reads, &fieldsOff, &fieldsSizes](size_t recIdx) {
             auto begin = boundaries[recIdx].chunkPtr;
             auto end   = begin + boundaries[recIdx].size;
             size_t aIdx = boundaries[recIdx].alnIdx;
@@ -359,7 +359,7 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
                 );
             }
         }
-    );
+    //);
     IO_PROFILE_STOP(ParseSimpleTypes);
 
     // ---- Phase 3: scan + complex types ----
@@ -425,10 +425,7 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
 
     IO_PROFILE_START(ParallelFor);
 
-    tbb::parallel_for(
-        0UL, nrecs,
-        [&boundaries, &reads, &fieldsOff, &fieldsSizes, &outputOffsets](size_t recIdx) {
-
+    for (size_t recIdx = 0; recIdx < nrecs; ++recIdx) {
             auto begin = boundaries[recIdx].chunkPtr;
             auto end   = begin + boundaries[recIdx].size;
             size_t aIdx = boundaries[recIdx].alnIdx;
@@ -445,7 +442,7 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
                 );
             }
         }
-    );
+    //);
     IO_PROFILE_STOP(ParallelFor);
     IO_PROFILE_STOP(ParseComplexTypes);
 
@@ -456,7 +453,14 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
 void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::function<SamAlignments()> get_batch,
                                        std::function<void(SamAlignments&&)> on_batch)
 {
-    if (!header_done_) { skip_bam_header(in); header_done_ = true; }
+    int32_t reader_id = slices_[nextSlice].id;
+    BQS_TRACE_SET_LANE(trace_tl::Role::Reader, (uint32_t)reader_id);
+    BQS_TRACE_SCOPE("bam_reader:ParseAlignmentStreamed_total");
+
+    if (!header_done_) {
+        BQS_TRACE_SCOPE("bam_reader:skip_bam_header");
+        skip_bam_header(in); header_done_ = true;
+    }
 
     auto batch_process  = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
     auto batch_transfer = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
@@ -471,11 +475,15 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     if(nextSlice >= slices_.size()){
         return;
     }
-    SeekVirtual(slices_[nextSlice].first, slices_[nextSlice].second);
+    SeekVirtual(slices_[nextSlice].start, slices_[nextSlice].end);
+    slice_id_process = slices_[nextSlice].id;
     nextSlice++;
 
     // Preload first batch
-    load_batch(batch_process, in);
+    {
+        BQS_TRACE_SCOPE("bam_reader:load_batch_first");
+        load_batch(batch_process, in);
+    }
 
     std::mutex m;
     std::condition_variable_any cv;
@@ -483,21 +491,36 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     std::exception_ptr loader_ex;
 
     std::jthread loader([&] (std::stop_token st) {
+        BQS_TRACE_SET_LANE(trace_tl::Role::Loader, (uint32_t)reader_id);
         try {
             for (;;) {
-                std::unique_lock lk(m);
-                cv.wait(lk, st, [&]{ return ready || stop; });
-                if (st.stop_requested() || stop) break;
-                ready = false;
-                lk.unlock();
-                if (nextSlice < slices_.size()) {
-                    SeekVirtual(slices_[nextSlice].first, slices_[nextSlice].second);
-                    nextSlice++;
-                    load_batch(batch_transfer, in);
+                {
+                    BQS_TRACE_SCOPE("bam_reader:loader_wait_ready");
+                    std::unique_lock lk(m);
+                    cv.wait(lk, st, [&]{ return ready || stop; });
+                    if (st.stop_requested() || stop) break;
+                    ready = false;
                 }
-                lk.lock();
-                done = true;
-                lk.unlock();
+
+                // do IO outside lock
+                if (nextSlice < slices_.size()) {
+                    {
+                        BQS_TRACE_SCOPE("bam_reader:loader_seek_next_slice");
+                        SeekVirtual(slices_[nextSlice].start, slices_[nextSlice].end);
+                    }
+                    slice_id_transfer = slices_[nextSlice].id;
+                    nextSlice++;
+
+                    // Optional: show decompression on its own lane just for the load
+                    BQS_TRACE_SET_LANE(trace_tl::Role::Decompress, reader_id);
+                    { BQS_TRACE_SCOPE("bam_reader:loader_load_batch"); load_batch(batch_transfer, in); }
+                    BQS_TRACE_SET_LANE(trace_tl::Role::Loader, reader_id);
+                }
+
+                {
+                    std::lock_guard lk(m);
+                    done = true;
+                }
                 cv.notify_one();
             }
         } catch (...) {
@@ -512,17 +535,21 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     current_batch.SetAlnsNum(0);
 
     while (first_batch || batch_process->buffer.has_data()
-           || (carry.stage == Carry::ReadBody && carry.need > 0))
-    {
+           || (carry.stage == Carry::ReadBody && carry.need > 0)) {
         { std::lock_guard lk(m); ready = true; done = false; }
         cv.notify_one();
 
         // Fill current_batch from batch_process
-        process_batch(batch_process, current_batch, alnsRead, carry, scratch);
+
+        {
+            BQS_TRACE_SCOPE("bam_reader:process_batch");
+            process_batch(batch_process, current_batch, alnsRead, carry, scratch);
+        }
 
         // hand off if we produced anything
         if (alnsRead > 0) {
             current_batch.SetAlnsNum(alnsRead);
+            current_batch.SetBatchId(slice_id_process);
             //current_batch->EnsureCapacity(alnsRead);
             //current_batch->Resize(alnsRead);
             on_batch(std::move(current_batch));
@@ -533,6 +560,7 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
 
         // Wait for loader
         {
+            BQS_TRACE_SCOPE("bam_reader:wait_loader_done");
             std::unique_lock lk(m);
             cv.wait(lk, [&]{ return done || loader_ex != nullptr; });
         }
@@ -540,6 +568,7 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
 
         // Swap in newly loaded data
         std::swap(batch_process, batch_transfer);
+        std::swap(slice_id_process, slice_id_transfer);
         first_batch = false;
     }
 
@@ -552,14 +581,14 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
 void BamReader::SeekVirtual(VOff voff_start, VOff voff_end) {
     auto* cis = dynamic_cast<CompressedInputStream*>(in.get());
     if (!cis) throw std::runtime_error("SeekVirtual requires CompressedInputStream (BGZF)");
-    VOff slice_beg = slices_[nextSlice].first;
-    VOff slice_end = slices_[nextSlice].second;
+    VOff slice_beg = slices_[nextSlice].start;
+    VOff slice_end = slices_[nextSlice].end;
 
-    std::cout << "[Slice " << nextSlice << "] beg coff=" << voff_coff(slice_beg)
+    /*std::cout << "[Slice " << nextSlice << "] beg coff=" << voff_coff(slice_beg)
           << " uoff=" << voff_uoff(slice_beg)
           << " end coff=" << voff_coff(slice_end)
           << " uoff=" << voff_uoff(slice_end)
-          << std::endl;
+          << std::endl;*/
 
     cis->set_virtual_end(voff_end);
     cis->seek_virtual(voff_start);
@@ -571,6 +600,6 @@ std::string_view BamReader::getslice(size_t numBytesToRead, size_t &numBytesRead
 }
 
 
-void BamReader::SetSlices(std::vector<std::pair<VOff, VOff>>&& slices) {
+void BamReader::SetSlices(std::vector<Slice>&& slices) {
     slices_ = slices;
 }

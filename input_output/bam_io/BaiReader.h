@@ -25,6 +25,13 @@ static inline VOff make_voff(uint64_t coff, uint32_t uoff) {
   return (VOff(coff) << 16) | VOff(uoff);
 }
 
+class Slice {
+public:
+    VOff start;
+    VOff end;
+    ssize_t id;
+};
+
 static inline bool voff_valid(VOff v) {
   if (v == 0)
     return false;

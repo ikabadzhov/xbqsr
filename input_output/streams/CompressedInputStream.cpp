@@ -230,9 +230,10 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
         std::vector<size_t> produced(plan.size(), 0);
         std::vector<int>    status(plan.size(), 0); // 0 ok, 1 eof, -1 error
 
-        tbb::parallel_for(size_t(0), plan.size(), [&](size_t i){
+        //tbb::parallel_for(size_t(0), plan.size(), [&](size_t i){
+        for (size_t i = 0; i < plan.size(); ++i) {
             const auto& j = plan[i];
-            if (j.decomp_size == 0) { status[i] = 1; produced[i] = 0; return; }
+            if (j.decomp_size == 0) { status[i] = 1; produced[i] = 0; break; }
 
             size_t out_n = 0;
             thread_local libdeflate_decompressor* tls_d = []{
@@ -248,11 +249,11 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
                 &out_n
             );
             if (st != LIBDEFLATE_SUCCESS || out_n != j.decomp_size) {
-                status[i] = -1; produced[i] = out_n; return;
+                status[i] = -1; produced[i] = out_n; break;
             }
             status[i] = 0;
             produced[i] = j.decomp_size;
-        });
+        }//);
 
         // -------- VALIDATION + ADVANCE + CLAMP END --------
         size_t appended = 0;

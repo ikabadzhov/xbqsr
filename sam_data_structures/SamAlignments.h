@@ -61,6 +61,8 @@ private:
     size_t N_ALNS{};
 
     size_t capacity;
+
+    ssize_t batch_id_ = -1;
     /**
      * Mandatory fields
      **/
@@ -103,6 +105,9 @@ public:
     [[nodiscard]] Header& GetHdr();
     size_t GetAlnsNum() const;
     void SetAlnsNum(size_t n);
+
+    void SetBatchId(uint64_t id) { batch_id_ = id; }
+    uint64_t BatchId() const { return batch_id_; }
 
     void Permute(std::vector<size_t>& indices);
 

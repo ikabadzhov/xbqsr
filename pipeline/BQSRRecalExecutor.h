@@ -12,11 +12,13 @@
 #include "../file_format/MappedFasta.h"
 #include "../bqsr/BQSR.h"
 
-// Forward decls / includes depending on your codebase
-// class BaseRecalibrator;
-// class BaseRecalibratorTables;
-// struct BQSRTableConfig;
-// class KnownSites;
+
+struct RecalCtx {
+    sycl::device dev_;
+    sycl::queue  q_;
+    std::shared_ptr<BaseRecalibratorTables> tables_;
+    std::shared_ptr<BaseRecalibrator>       recal_;
+};
 
 class BQSRRecalExecutor final : public IExecutor {
 public:

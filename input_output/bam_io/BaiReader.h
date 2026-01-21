@@ -387,7 +387,7 @@ inline uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
 // Adds an extra tail slice to EOF to include unmapped/no-coor reads.
 // ------------------------------------------------------------
 inline std::vector<std::pair<VOff, VOff>>
-split_ranges_equal_by_compressed_span(const std::vector<VOff> &ioffsets,
+split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vector<VOff> &ioffsets,
                                       size_t max_size) {
   if (max_size <= 0)
     throw std::runtime_error("max_size must be > 0");
@@ -400,7 +400,7 @@ split_ranges_equal_by_compressed_span(const std::vector<VOff> &ioffsets,
 
   // Need BAM path to estimate decompressed bytes (block ISIZE). Infer from last
   // loaded BAI path.
-  const std::string bam_path = _infer_bam_path_from_last_bai();
+  //const std::string bam_path = _infer_bam_path_from_last_bai();
 
   // Build a light BGZF index starting at the first ioffset coff.
   const uint64_t coff_min = voff_coff(ioffsets.front());

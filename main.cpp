@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
 
     auto bai = load_bai_linear(bai_path);
     std::vector<std::pair<VOff,VOff>> ranges =
-        split_ranges_equal_by_compressed_span(bai.ioffsets, 512UL*1024*1024);
+        split_ranges_equal_by_compressed_span(args.input_bam, bai.ioffsets, 512UL*1024*1024);
 
     Logger::getLogger().log(LOG_INFO, "Partitioning slices");
 

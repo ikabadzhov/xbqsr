@@ -1,10 +1,11 @@
 // BamBatchFormatter.cpp
 #include "BamBatchFormatter.h"
+#include "HeaderFormatter.h"
 
 void BamBatchFormatter::FormatHeaderTo(Header& hdr, std::vector<uint8_t>& out) {
     std::call_once(header_once_, [&] {
         std::string sam_text;
-        SamHeaderFormatter::FormatSamHeader(hdr, sam_text);
+        HeaderFormatter::FormatSamHeader(hdr, sam_text);
 
         std::vector<uint8_t> buf;
         buf.reserve(4096 + sam_text.size());

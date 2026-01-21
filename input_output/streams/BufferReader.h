@@ -1,11 +1,7 @@
-#ifndef GENOMICPIPELINE_BUFFERREADER_H
-#define GENOMICPIPELINE_BUFFERREADER_H
-
+#pragma once
 #include <string>
 #include <memory>
-#include <utility>
 #include "InputStream.h"
-
 
 class BufferReader {
     std::string buffer;
@@ -28,6 +24,3 @@ public:
 
     size_t available_data();
 };
-
-
-#endif //GENOMICPIPELINE_BUFFERREADER_H

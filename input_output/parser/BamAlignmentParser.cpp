@@ -1,18 +1,14 @@
 #include "BamAlignmentParser.h"
 #include "../utils/ByteScanner.h"
-#include "../../timer/ProfilerIO.h"
 
 // Parse exactly one BAM alignment from a complete record body (i.e., block_size bytes).
-// Precondition: 'bytes' is exactly the block body (NOT including the 4-byte block_size field).
+// Precondition: "bytes" is exactly the block body (NOT including the 4-byte block_size field).
 void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
                                                     SamAlignments& reads,
                                                     size_t idx)
 {
-    //auto& profiler = ProfilerIO::instance();
 
     // -------------------- PARSING --------------------
-    //profiler.start(IOStageId::Parsing);
-
     ByteScanner bs;
     bs.reset(bytes);
 
@@ -61,10 +57,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
         bs.incrementIndex(static_cast<size_t>(l_seq));
     }
 
-    //profiler.stop(IOStageId::Parsing);
-
     // ---------------- SAM STRUCT UPDATES ----------------
-    //profiler.start(IOStageId::SAMStructUpdates);
 
     reads.RNAME[idx] = (refID < 0) ? SequenceRecord::RESERVED_SEQUENCE_NAMES['*'] : refID;
     if (next_refID < 0) next_refID = SequenceRecord::RESERVED_SEQUENCE_NAMES['*'];
@@ -77,7 +70,6 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
     reads.TLEN[idx]  = tlen;
 
     if (!qname.empty()) {
-        //reads.QNAME[idx] = reads.GetHdr().QnameMapper().addString(qname);
         reads.TILE[idx] = computeTileInfo(qname);
     }
 
@@ -153,7 +145,6 @@ void BamAlignmentParser::ParseBamAlignmentFromSlice(std::string_view bytes,
             throw std::runtime_error("Unknown BAM tag type");
         }
     }
-    //profiler.stop(IOStageId::SAMStructUpdates);
 }
 
 void BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
@@ -268,7 +259,6 @@ static const uint8_t* skip_payload(const uint8_t* q,
             while (r < e && *r != 0) ++r;
             return (r < e) ? (r + 1) : e; // include NUL if present
         }
-
             // Array
         case 'B': {
             // Need at least subtype(1) + count(4)
@@ -385,7 +375,7 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
         opt.tagsBlobOff[idx]  = outOff.aux;
         opt.tagsBlobSize[idx] = fieldsSizes.aux;
 
-        // ---- RG extraction (Z string) → map to int via header ----
+        // ---- RG extraction (Z string): map to int via header ----
         const uint8_t* p = reinterpret_cast<const uint8_t*>(opt.tagArena.data()) + outOff.aux;
         const uint8_t* e = p + fieldsSizes.aux;
 
@@ -416,15 +406,11 @@ void BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
         }
 
         // store integer RG for this record
-        // If your API is a plain array:
-        // opt.RG[idx] = rg_int;
-        // If it's a column type:
         opt.RG[idx] = rg_int;
 
     } else {
         opt.tagsBlobOff[idx]  = std::numeric_limits<size_t>::max();
         opt.tagsBlobSize[idx] = 0;
-        // opt.RG[idx] or opt.RG.Set(idx, -1);
         opt.RG[idx] = -1;
     }
 }

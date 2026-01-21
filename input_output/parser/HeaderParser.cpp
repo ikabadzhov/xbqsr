@@ -1,4 +1,4 @@
-#include "SamHeaderParser.h"
+#include "HeaderParser.h"
 #include "ParsedHeaderLine.h"
 
 /*

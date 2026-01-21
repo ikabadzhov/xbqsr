@@ -10,12 +10,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
-
-#include <tbb/parallel_for.h>
-
 #include "../../sam_data_structures/SamHeader.h"
 #include "../../sam_data_structures/SamAlignments.h"
-#include "../formatter/SamHeaderFormatter.h"
 #include "../parser/IOBatch.h"
 
 class BamBatchFormatter {

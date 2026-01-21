@@ -1,4 +1,3 @@
-// BGZFOutputStream.cpp
 #include "BGZFOutputStream.h"
 
 #include <algorithm>
@@ -9,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include "../../timer/TraceTimeline.h"
+#include "../utils/Constant.h"
 
 // Canonical 28-byte BGZF EOF block
 static const uint8_t BGZF_EOF[28] = {
@@ -25,7 +25,19 @@ BGZFOutputStream::BGZFOutputStream(const std::string& path,
                                    int compression_level,
                                    unsigned threads)
     : path_(path),
-      level_(std::clamp(compression_level, 1, 12))
+    level_(std::clamp(compression_level, 1, 12)),
+    free_pool_(UnboundedChannel<std::unique_ptr<BgzfTask>>(DEFAULT_BUFFER_SIZE / UN_TARGET_,
+        [&]() -> std::unique_ptr<BgzfTask> {
+                  auto t = std::make_unique<BgzfTask>();
+                  t->un.resize(UN_TARGET_);      // allocate once
+                  // leave cz empty; it will resize to bound on demand
+                  t->un_len = 0;
+                  t->cz_len = 0;
+                  t->crc = 0;
+                  t->poison = false;
+                  t->seq = 0;
+                  return t;
+                }))
 {
     if (threads == 0) threads = 1;
     const unsigned nworkers = std::min<unsigned>(threads, 100);
@@ -38,9 +50,8 @@ BGZFOutputStream::BGZFOutputStream(const std::string& path,
         out_ring_[i].ready = false;
     }
 
-    cur_ = std::make_unique<BgzfTask>();
+    cur_ = free_pool_.pop();
     cur_->seq = next_seq_.fetch_add(1, std::memory_order_relaxed);
-    cur_->un.resize(UN_TARGET_);
     cur_->un_len = 0;
 
     start_threads_(nworkers);
@@ -132,6 +143,8 @@ void BGZFOutputStream::worker_loop_(size_t worker_id) {
                 BQS_TRACE_SCOPE("bgzf_worker:compress_total");
 
                 const size_t bound = libdeflate_deflate_compress_bound(comp.get(), task->un_len);
+
+                if (task->cz.capacity() < bound) task->cz.reserve(bound);
                 task->cz.resize(bound);
 
                 task->crc = libdeflate_crc32(0, task->un.data(), task->un_len);
@@ -253,14 +266,17 @@ void BGZFOutputStream::writer_loop_() {
 
             write_bgzf_task_(*next);
 
+            next->poison = false;
+            next->un_len = 0;
+            next->cz_len = 0;
+            next->crc = 0;
+            next->cz.clear();
+            (void)free_pool_.push(std::move(next));
 
-            {
-                BQS_TRACE_SCOPE("bgzf_writer:in_flight--");
-                const size_t prev = in_flight_.fetch_sub(1, std::memory_order_acq_rel);
-                if (prev == 1) {
-                    std::lock_guard lk(done_m_);
-                    done_cv_.notify_all();
-                }
+            const size_t prev = in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+            if (prev == 1) {
+                std::lock_guard lk(done_m_);
+                done_cv_.notify_all();
             }
 
             out_cv_.notify_all();
@@ -271,8 +287,6 @@ void BGZFOutputStream::writer_loop_() {
 }
 
 void BGZFOutputStream::enqueue_full_task_() {
-    BQS_TRACE_SCOPE("bgzf:enqueue_full_task_total");
-
     if (stop_.load(std::memory_order_acquire)) return;
 
     in_flight_.fetch_add(1, std::memory_order_acq_rel);
@@ -287,15 +301,18 @@ void BGZFOutputStream::enqueue_full_task_() {
 
     {
         BQS_TRACE_SCOPE("bgzf:alloc_new_task");
-        cur_ = std::make_unique<BgzfTask>();
-        cur_->seq = next_seq_.fetch_add(1, std::memory_order_relaxed);
-        cur_->un.resize(UN_TARGET_);
-        cur_->un_len = 0;
+        cur_ = free_pool_.pop();
     }
+    cur_->poison = false;
+    cur_->seq = next_seq_.fetch_add(1, std::memory_order_relaxed);
+    cur_->un_len = 0;
+    cur_->cz_len = 0;
+    cur_->crc = 0;
+
 }
 
 size_t BGZFOutputStream::write(std::span<const uint8_t> data) {
-    BQS_TRACE_SCOPE("bgzf:write_total");
+    //BQS_TRACE_SCOPE("bgzf:write_total");
 
     if (closed_) throw std::runtime_error("BGZFOutputStream::write on closed stream");
     rethrow_if_exception_();
@@ -311,8 +328,10 @@ size_t BGZFOutputStream::write(std::span<const uint8_t> data) {
             space = UN_TARGET_;
         }
         const size_t take = std::min(space, n);
-        std::memcpy(cur_->un.data() + cur_->un_len, p, take);
-
+        {
+            BQS_TRACE_SCOPE("bgzf:memcpy");
+            std::memcpy(cur_->un.data() + cur_->un_len, p, take);
+        }
         cur_->un_len += take;
         p += take;
         n -= take;
@@ -392,7 +411,7 @@ size_t BGZFOutputStream::fd_write_all_(std::span<const uint8_t> data) {
 }
 
 void BGZFOutputStream::fd_writev_all_(struct iovec* iov, int iovcnt) {
-    BQS_TRACE_SCOPE("bgzf_writer:fd_writev_all_total");
+    //BQS_TRACE_SCOPE("bgzf_writer:fd_writev_all_total");
 
     int i = 0;
     while (i < iovcnt) {

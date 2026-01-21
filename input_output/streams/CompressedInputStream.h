@@ -1,6 +1,4 @@
-#ifndef GENOMICPIPELINE_COMPRESSEDINPUTSTREAM_H
-#define GENOMICPIPELINE_COMPRESSEDINPUTSTREAM_H
-
+#pragma once
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -10,10 +8,7 @@
 #include "PlainInputStream.h"
 #include "../../zlib.h"
 
-#define USE_LIBDEFLATE 1
-#ifdef USE_LIBDEFLATE
 #include <libdeflate.h>
-#endif
 
 
 struct BlockMeta {
@@ -42,7 +37,6 @@ class CompressedInputStream : public InputStream {
 
     gzFile fileDescriptor;
     std::string path;
-    //z_stream strm{};
 
     static bool isValidBlockHeader(std::string& buffer);
 
@@ -92,6 +86,7 @@ private:
     bool inflate_one_bgzf_block_();
     bool inflate_bgzf_block_(BlockMeta& block);
     bool get_bgzf_blocks_indexes(std::vector<BlockMeta>& blocks);
+
     // Move unconsumed bytes to the front so we can append efficiently.
     void compact_stash_();
 
@@ -118,13 +113,6 @@ private:
     std::vector<uint8_t> tmp_decomp_;
     std::vector<std::array<uint8_t, BGZF_BLOCK_SIZE>> comp_pool;
 
-    // Inflaters
-    //z_stream zstrm_;
-
-
+    // Inflater
     libdeflate_decompressor* decomp_ = nullptr;
-
 };
-
-
-#endif //GENOMICPIPELINE_COMPRESSEDINPUTSTREAM_H

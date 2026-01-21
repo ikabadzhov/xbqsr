@@ -1,8 +1,6 @@
 #include "AlignmentWriterFactory.h"
 #include "../bam_io/BamWriter.h"
 #include "../streams/BGZFOutputStream.h"
-#include "../streams/CompressedOutputStream.h"
-#include "../streams/PlainOutputStream.h"
 
 std::unique_ptr<AlignmentWriter> AlignmentWriterFactory::open(const std::string &filename, size_t buffSz) {
     std::string fileExtension = filename.substr(filename.size()-4, 4);

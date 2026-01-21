@@ -1,7 +1,7 @@
 // UnboundedChannel.h
 #pragma once
 
-#include <deque>
+#include <vector>
 #include <functional>
 #include <mutex>
 #include <stdexcept>
@@ -11,9 +11,9 @@
 // Unbounded "pool" channel:
 // - Pre-fills with N reusable elements built by factory()
 // - pop() NEVER blocks:
-//    * if queue has an element -> returns it
-//    * if empty and open        -> returns factory() (grows the pool)
-//    * if empty and closed      -> throws (logic error / shutdown path)
+//    * if pool has an element -> returns it
+//    * if empty and open      -> returns factory() (grows the pool)
+//    * if empty and closed    -> throws (logic error / shutdown path)
 // - push() returns false if closed
 template <class T>
 class UnboundedChannel {
@@ -27,10 +27,9 @@ public:
         if (!factory_) {
             throw std::runtime_error("UnboundedChannel: factory is null");
         }
-        q_.clear();
-        q_.shrink_to_fit();
+        pool_.reserve(initial_pool);
         for (std::size_t i = 0; i < initial_pool; ++i) {
-            q_.emplace_back(factory_());
+            pool_.emplace_back(factory_());
         }
     }
 
@@ -40,16 +39,16 @@ public:
     bool push(T&& v) {
         std::lock_guard<std::mutex> lk(m_);
         if (closed_) return false;
-        q_.emplace_back(std::move(v));
+        pool_.emplace_back(std::move(v));
         return true;
     }
 
     // Never blocks. See class comment for behavior.
     T pop() {
         std::lock_guard<std::mutex> lk(m_);
-        if (!q_.empty()) {
-            T v = std::move(q_.front());
-            q_.pop_front();
+        if (!pool_.empty()) {
+            T v = std::move(pool_.back());
+            pool_.pop_back();
             return v;
         }
         if (closed_) {
@@ -71,12 +70,12 @@ public:
 
     std::size_t size() const {
         std::lock_guard<std::mutex> lk(m_);
-        return q_.size();
+        return pool_.size();
     }
 
 private:
     mutable std::mutex m_;
-    std::deque<T> q_;
+    std::vector<T> pool_;
     Factory factory_;
     bool closed_{false};
 };

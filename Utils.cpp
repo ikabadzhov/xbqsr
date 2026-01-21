@@ -21,6 +21,25 @@ void Fields(std::string &s, std::vector<std::string> &result) {
     result.emplace_back(s);
 }
 
+static inline void trim_inplace(std::string& s) {
+    auto is_ws = [](unsigned char c){ return std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char c){ return !is_ws(c); }));
+    s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char c){ return !is_ws(c); }).base(), s.end());
+}
+
+static std::vector<std::string> split_csv(std::string s) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (true) {
+        size_t comma = s.find(',', start);
+        std::string tok = (comma == std::string::npos) ? s.substr(start) : s.substr(start, comma - start);
+        trim_inplace(tok);
+        if (!tok.empty()) out.push_back(tok);
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return out;
+}
 
 void init_options( po::options_description &description, bool &help ){
 
@@ -32,7 +51,7 @@ void init_options( po::options_description &description, bool &help ){
             "recal", po::value<string>(), "Recalibration table file" )(
             "ref", po::value<string>(), "Reference FASTA file (recalibrate command only)" )(
             "known-sites", po::value<string>(), "Comma-delimited list of known variant sites (recalibrate command only)" )(
-            "gpus", po::value<string>(), "Number of GPUs to use (default: 1, or 'all' to use all available GPUs)" )(
+            "gpus", po::value<std::string>()->default_value("0"), "GPU selection: 'all' or comma-separated indices (e.g. 0,1,3). Default: 0" )(
             "verbose,v", po::bool_switch(), "Enable verbose output"
     );
 
@@ -275,63 +294,57 @@ Arguments parse_arguments(int argc, char** argv) {
         }
     }
 
-    // Parse optional --gpus parameter (comma-separated list of device indices or 'all')
+    // Parse optional --gpus parameter: 'all' or comma-separated list of indices
+    args.gpu_use_all = false;
+    args.gpu_devices.clear();
+
     if (vm.count("gpus")) {
-        std::string gpus_str = vm["gpus"].as<string>();
-        if (gpus_str == "all") {
-            args.gpu_use_all = true;  // Use all available GPUs
+        std::string gpus_str = vm["gpus"].as<std::string>();
+        trim_inplace(gpus_str);
+
+        if (gpus_str.empty()) {
+            std::cerr << "Error: --gpus requires 'all' or a comma-separated list like 0,1\n";
+            exit(-1);
+        }
+
+        if (gpus_str == "all" || gpus_str == "ALL" || gpus_str == "All") {
+            args.gpu_use_all = true;
         } else {
-            // Parse comma-separated list of device indices
-            std::string delimiter = ",";
-            size_t pos = 0;
-            std::string token;
-            while ((pos = gpus_str.find(delimiter)) != std::string::npos) {
-                token = gpus_str.substr(0, pos);
-                // Trim whitespace
-                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
-                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
-
-                try {
-                    int device_id = std::stoi(token);
-                    if (device_id < 0) {
-                        std::cerr << "Error: Device indices must be non-negative (--gpus)\n" << std::endl;
-                        exit(-1);
-                    }
-                    args.gpu_devices.push_back(device_id);
-                } catch (const std::invalid_argument& e) {
-                    std::cerr << "Error: Invalid device index '" << token
-                              << "'. Must be a non-negative integer or 'all' (--gpus)\n" << std::endl;
-                    exit(-1);
-                }
-                gpus_str.erase(0, pos + delimiter.length());
-            }
-
-            // Process the last token
-            if (!gpus_str.empty()) {
-                token = gpus_str;
-                // Trim whitespace
-                token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
-                token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
-
-                try {
-                    int device_id = std::stoi(token);
-                    if (device_id < 0) {
-                        std::cerr << "Error: Device indices must be non-negative (--gpus)\n" << std::endl;
-                        exit(-1);
-                    }
-                    args.gpu_devices.push_back(device_id);
-                } catch (const std::invalid_argument& e) {
-                    std::cerr << "Error: Invalid device index '" << token
-                              << "'. Must be a non-negative integer or 'all' (--gpus)\n" << std::endl;
-                    exit(-1);
-                }
-            }
-
-            // Check if at least one device was specified
-            if (args.gpu_devices.empty()) {
-                std::cerr << "Error: At least one device index must be specified or use 'all' (--gpus)\n" << std::endl;
+            auto toks = split_csv(gpus_str);
+            if (toks.empty()) {
+                std::cerr << "Error: --gpus requires at least one index (e.g. --gpus 0,1) or 'all'\n";
                 exit(-1);
             }
+
+            for (const auto& tok : toks) {
+                try {
+                    size_t consumed = 0;
+                    int id = std::stoi(tok, &consumed, 10);
+                    if (consumed != tok.size()) {
+                        std::cerr << "Error: Invalid GPU token '" << tok
+                                  << "'. Use comma-separated integers (e.g. 0,1,3) or 'all'\n";
+                        exit(-1);
+                    }
+                    if (id < 0) {
+                        std::cerr << "Error: GPU indices must be non-negative. Got: " << id << "\n";
+                        exit(-1);
+                    }
+                    args.gpu_devices.push_back(id);
+                } catch (...) {
+                    std::cerr << "Error: Invalid GPU token '" << tok
+                              << "'. Use comma-separated integers (e.g. 0,1,3) or 'all'\n";
+                    exit(-1);
+                }
+            }
+
+            // Deduplicate while preserving order
+            std::vector<int> dedup;
+            dedup.reserve(args.gpu_devices.size());
+            for (int id : args.gpu_devices) {
+                if (std::find(dedup.begin(), dedup.end(), id) == dedup.end())
+                    dedup.push_back(id);
+            }
+            args.gpu_devices = std::move(dedup);
         }
     } else {
         // Default: use first GPU

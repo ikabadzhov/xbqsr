@@ -1,5 +1,5 @@
 #include "BamHeaderFormatter.h"
-#include "SamHeaderFormatter.h"
+#include "HeaderFormatter.h"
 #include "../utils/ByteFormatter.h"
 #include "../utils/Constant.h"
 
@@ -12,7 +12,7 @@ void BamHeaderFormatter::FormatBamHeader(Header &hdr, std::string &line) {
     bf.appendString("BAM\001");
     //line.append(BAM_MAGIC);
 
-    SamHeaderFormatter::FormatSamHeader(hdr, textHeaderLine);
+    HeaderFormatter::FormatSamHeader(hdr, textHeaderLine);
 
     //Field: l_text
     bf.appendInt32(textHeaderLine.size());

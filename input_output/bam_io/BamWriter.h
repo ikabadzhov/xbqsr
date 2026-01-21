@@ -2,7 +2,6 @@
 #pragma once
 #include <memory>
 #include <vector>
-#include <span>
 #include <mutex>
 #include <condition_variable>
 #include <stop_token>
@@ -21,16 +20,16 @@ public:
     explicit BamWriter(std::unique_ptr<OutputStream> sink);
 
     // Back-compatible API (same idea as your current implementation)
-    void FormatHeader(Header& hdr);
-    void BeginStreaming();
+    void FormatHeader(Header& hdr) override;
+    void BeginStreaming() override;
     void WriteAlignmentBatch(SamAlignments& block) override;
 
     void WriteFormattedBatchDirect(OutputBatchBam &batch) override;
 
     void WriteFormattedBatch(OutputBatchBam& batch) override;
-    void EndStreaming();
-    void FormatAlignment(std::vector<SamAlignments>& blocks);
-    void Close();
+    void EndStreaming() override;
+    void FormatAlignment(std::vector<SamAlignments>& blocks) override;
+    void Close() override;
 
     ~BamWriter();
 

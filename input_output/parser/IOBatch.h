@@ -1,16 +1,9 @@
-#ifndef GENOMICPIPELINE_IOBATCH_H
-#define GENOMICPIPELINE_IOBATCH_H
-
+#pragma once
 
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "../streams/BufferReader.h"
-
-class IOBatch {
-
-};
 
 class InputBatchBam {
 public:
@@ -23,7 +16,6 @@ public:
 
 };
 
-// Give this the same spirit as InputBatchBam, but for output.
 class OutputBatchBam {
 public:
     explicit OutputBatchBam(size_t cap) : buf_(cap), capacity_(cap) {}
@@ -63,5 +55,3 @@ private:
     size_t n_records_{0};
     ssize_t id_ = -1;
 };
-
-#endif //GENOMICPIPELINE_IOBATCH_H

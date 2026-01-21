@@ -1,8 +1,4 @@
-#ifndef GENOMICPIPELINE_INPUTSTREAM_H
-#define GENOMICPIPELINE_INPUTSTREAM_H
-
-
-#include <cstdio>
+#pragma once
 #include <string>
 
 class InputStream {
@@ -17,6 +13,3 @@ public:
     virtual void close() = 0;
     virtual ~InputStream() = default;  // Virtual destructor
 };
-
-
-#endif //GENOMICPIPELINE_INPUTSTREAM_H

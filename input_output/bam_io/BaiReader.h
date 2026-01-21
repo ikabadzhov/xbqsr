@@ -1,6 +1,4 @@
-#ifndef BAIREADER_H
-#define BAIREADER_H
-
+#pragma once
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -44,45 +42,40 @@ static inline bool voff_valid(VOff v) {
 // ------------------------------------------------------------
 // Little-endian helpers
 // ------------------------------------------------------------
-static inline uint16_t rd_le16(const uint8_t *p) {
+inline uint16_t rd_le16(const uint8_t *p) {
   return uint16_t(p[0]) | (uint16_t(p[1]) << 8);
 }
-static inline uint32_t rd_le32(const uint8_t *p) {
+inline uint32_t rd_le32(const uint8_t *p) {
   return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) |
          (uint32_t(p[3]) << 24);
 }
 
-// ------------------------------------------------------------
-// BAI IO helpers
-// ------------------------------------------------------------
-static uint32_t read_u32(FILE *f) {
+inline uint32_t read_u32(FILE *f) {
   uint32_t x;
   if (fread(&x, 4, 1, f) != 1)
     throw std::runtime_error("BAI read_u32 failed");
   return x;
 }
-static uint64_t read_u64(FILE *f) {
+
+inline uint64_t read_u64(FILE *f) {
   uint64_t x;
   if (fread(&x, 8, 1, f) != 1)
     throw std::runtime_error("BAI read_u64 failed");
   return x;
 }
 
-// ------------------------------------------------------------
-// Linear index
-// ------------------------------------------------------------
 struct BaiLinearIndex {
   std::vector<VOff> ioffsets; // flattened across references
 };
 
 // Tracks the last BAI path we loaded, so the splitter can infer BAM path
 // without changing signatures (your main calls load_bai_linear() first).
-static inline std::string &_last_loaded_bai_path() {
+inline std::string &_last_loaded_bai_path() {
   static std::string s;
   return s;
 }
 
-static BaiLinearIndex load_bai_linear(const std::string &bai_path) {
+inline BaiLinearIndex load_bai_linear(const std::string &bai_path) {
   _last_loaded_bai_path() = bai_path;
 
   FILE *f = std::fopen(bai_path.c_str(), "rb");
@@ -119,7 +112,6 @@ static BaiLinearIndex load_bai_linear(const std::string &bai_path) {
       if (voff_valid(voff))
         out.ioffsets.push_back(voff);
     }
-
     // metadata pseudo-bin (37450) is inside bins above; we are skipping it here
     // on purpose. Unmapped/no-coor will be handled by appending a tail slice to
     // EOF (see splitter).
@@ -133,10 +125,7 @@ static BaiLinearIndex load_bai_linear(const std::string &bai_path) {
   return out;
 }
 
-// ------------------------------------------------------------
-// Find BAI for BAM (unchanged)
-// ------------------------------------------------------------
-static std::string find_bai_path(const std::string &bam_path) {
+inline std::string find_bai_path(const std::string &bam_path) {
   namespace fs = std::filesystem;
 
   fs::path p(bam_path);
@@ -156,7 +145,7 @@ static std::string find_bai_path(const std::string &bam_path) {
 }
 
 // Infer BAM path from the last loaded BAI path (so we don't change signatures).
-static std::string _infer_bam_path_from_last_bai() {
+inline std::string _infer_bam_path_from_last_bai() {
   namespace fs = std::filesystem;
   fs::path bai(_last_loaded_bai_path());
   if (bai.empty()) {
@@ -196,7 +185,7 @@ static std::string _infer_bam_path_from_last_bai() {
 // BGZF parsing: read one block {cbytes, ubytes} and advance to next block.
 // Robustly handles optional gzip fields to avoid desync.
 // ------------------------------------------------------------
-static std::pair<uint32_t, uint32_t> read_bgzf_block_cbytes_ubytes(FILE *f) {
+inline std::pair<uint32_t, uint32_t> read_bgzf_block_cbytes_ubytes(FILE *f) {
   uint8_t hdr[10];
   if (fread(hdr, 1, 10, f) != 10)
     throw std::runtime_error("EOF reading gzip header");
@@ -301,23 +290,16 @@ struct _BgzfLightIndex {
   std::vector<uint64_t> prefix_ubytes; // prefix sum at block start
 };
 
-static _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
+inline _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
                                                uint64_t coff_start) {
   FILE *f = std::fopen(bam_path.c_str(), "rb");
   if (!f)
     throw std::runtime_error("Cannot open BAM: " + bam_path);
 
-#if defined(_WIN32)
-  if (_fseeki64(f, (long long)coff_start, SEEK_SET) != 0) {
-    std::fclose(f);
-    throw std::runtime_error("_fseeki64 failed seeking BAM");
-  }
-#else
   if (fseeko(f, (off_t)coff_start, SEEK_SET) != 0) {
     std::fclose(f);
     throw std::runtime_error("fseeko failed seeking BAM");
   }
-#endif
 
   _BgzfLightIndex idx;
   idx.coff.reserve(1 << 20);
@@ -327,22 +309,12 @@ static _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
   uint64_t prefix = 0;
 
   while (true) {
-    // current coff
-#if defined(_WIN32)
-    long long pos_ll = _ftelli64(f);
-    if (pos_ll < 0) {
-      std::fclose(f);
-      throw std::runtime_error("_ftelli64 failed");
-    }
-    uint64_t coff = uint64_t(pos_ll);
-#else
     off_t pos = ftello(f);
     if (pos < 0) {
       std::fclose(f);
       throw std::runtime_error("ftello failed");
     }
     uint64_t coff = uint64_t(pos);
-#endif
 
     // EOF check
     int c = std::fgetc(f);
@@ -363,7 +335,7 @@ static _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
   return idx;
 }
 
-static VOff _compute_eof_voff_from_light_index(const _BgzfLightIndex &bg,
+inline VOff _compute_eof_voff_from_light_index(const _BgzfLightIndex &bg,
                                                uint64_t coff_start_global) {
   // coff_start_global is unused in this form; kept for clarity.
   if (bg.coff.empty())
@@ -374,7 +346,7 @@ static VOff _compute_eof_voff_from_light_index(const _BgzfLightIndex &bg,
 }
 
 // Snap helpers for over-estimating “full blocks touched” between two voffs.
-static size_t _snap_beg_block_idx(const _BgzfLightIndex &bg,
+inline size_t _snap_beg_block_idx(const _BgzfLightIndex &bg,
                                   uint64_t coff_beg) {
   // want last block start <= coff_beg
   auto it = std::upper_bound(bg.coff.begin(), bg.coff.end(), coff_beg);
@@ -382,7 +354,7 @@ static size_t _snap_beg_block_idx(const _BgzfLightIndex &bg,
     return 0;
   return size_t((it - bg.coff.begin()) - 1);
 }
-static size_t _snap_end_block_idx(const _BgzfLightIndex &bg,
+inline size_t _snap_end_block_idx(const _BgzfLightIndex &bg,
                                   uint64_t coff_end) {
   // want first block start >= coff_end
   auto it = std::lower_bound(bg.coff.begin(), bg.coff.end(), coff_end);
@@ -391,7 +363,7 @@ static size_t _snap_end_block_idx(const _BgzfLightIndex &bg,
   return size_t(it - bg.coff.begin());
 }
 
-static uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
+inline uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
                                                       VOff beg, VOff end) {
   uint64_t cb = voff_coff(beg);
   uint64_t ce = voff_coff(end);
@@ -414,7 +386,7 @@ static uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
 // It returns many ranges so each estimated decompressed size <= limit.
 // Adds an extra tail slice to EOF to include unmapped/no-coor reads.
 // ------------------------------------------------------------
-static std::vector<std::pair<VOff, VOff>>
+inline std::vector<std::pair<VOff, VOff>>
 split_ranges_equal_by_compressed_span(const std::vector<VOff> &ioffsets,
                                       size_t max_size) {
   if (max_size <= 0)
@@ -509,7 +481,7 @@ split_ranges_equal_by_compressed_span(const std::vector<VOff> &ioffsets,
 // Over-estimated decompressed bytes in [beg_voff, end_voff):
 // counts full BGZF blocks touched between coff(beg) and coff(end), inclusive of
 // start/end blocks.
-static uint64_t estimate_range_decompressed_bytes_over(FILE *f, VOff beg_voff,
+inline uint64_t estimate_range_decompressed_bytes_over(FILE *f, VOff beg_voff,
                                                        VOff end_voff) {
   const uint64_t coff_b = voff_coff(beg_voff);
   const uint64_t coff_e = voff_coff(end_voff);
@@ -517,28 +489,16 @@ static uint64_t estimate_range_decompressed_bytes_over(FILE *f, VOff beg_voff,
   if (coff_e < coff_b)
     throw std::runtime_error("range end before start");
 
-#if defined(_WIN32)
-  if (_fseeki64(f, (long long)coff_b, SEEK_SET) != 0)
-    throw std::runtime_error("_fseeki64 failed");
-#else
   if (fseeko(f, (off_t)coff_b, SEEK_SET) != 0)
     throw std::runtime_error("fseeko failed");
-#endif
 
   uint64_t total = 0;
 
   while (true) {
-#if defined(_WIN32)
-    long long pos_ll = _ftelli64(f);
-    if (pos_ll < 0)
-      throw std::runtime_error("_ftelli64 failed");
-    uint64_t coff_cur = uint64_t(pos_ll);
-#else
     off_t pos = ftello(f);
     if (pos < 0)
       throw std::runtime_error("ftello failed");
     uint64_t coff_cur = uint64_t(pos);
-#endif
 
     if (coff_cur > coff_e)
       break;
@@ -554,7 +514,7 @@ static uint64_t estimate_range_decompressed_bytes_over(FILE *f, VOff beg_voff,
   return total;
 }
 
-static void print_ranges_estimated_decompressed_over(
+inline void print_ranges_estimated_decompressed_over(
     const std::string &bam_path,
     const std::vector<std::pair<VOff, VOff>> &ranges) {
   if (ranges.empty()) {
@@ -600,5 +560,3 @@ static void print_ranges_estimated_decompressed_over(
 
   std::fclose(f);
 }
-
-#endif // BAIREADER_H

@@ -2,12 +2,9 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
-#include <vector>
 
 #include "SamHeaderRecord.h"
 #include "../../data_types/StringDictionary.h"
-#include "../../data_types/TransparentStringTypes.h"
-
 
 class ReadGroupRecord : public SamHeaderRecord {
     std::string readGroupId;
@@ -17,27 +14,25 @@ public:
 };
 
 class ReadGroupsDictionary {
-    std::vector<ReadGroupRecord>         readGroups;
+    std::vector<ReadGroupRecord> readGroups;
     std::unordered_map<std::string, int> stringToId;
-    //std::vector<std::pair<std::string, int>> stringToId;
-    std::vector<std::string>             idToString;
+    std::vector<std::string> idToString;
 
     // Encoded PU dictionary and RG->PU mapping
-    StringDictionary                     pu_;
+    StringDictionary pu_;
 
-    std::vector<int32_t>                 rgId2PuId_;
+    std::vector<int32_t> rgId2PuId_;
 
     int32_t nextId = 0;
 
 public:
-    static constexpr int EMPTY_STRING     = -1;
+    static constexpr int EMPTY_STRING = -1;
     static constexpr int STRING_NOT_FOUND = -2;
 
     ReadGroupsDictionary() = default;
 
     int32_t add(const ReadGroupRecord& readGroup);
     int32_t getId(const std::string& str) const;
-    int32_t getId(std::string_view str) const;
 
     const std::string&      getString(int32_t id) const;
     const ReadGroupRecord&  getReadGroupRecord(int32_t id) const;

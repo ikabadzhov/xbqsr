@@ -19,22 +19,23 @@
 #include "BoundedChannel.h"
 #include "UnboundedChannel.h"
 #include "AssociativeChannel.h"
+#include "BoundedPool.h"
 
 #include "../sam_data_structures/SamAlignments.h"
 #include "../input_output/bam_io/BamWriter.h"
 #include "../input_output/formatter/BamBatchFormatter.h"
 #include "../timer/TraceTimeline.h"
 
-// StreamingEngine.h
-//
-// - Producers parse and push batches to in_chan_
-// - Workers pop, run stages, return batch to free_in pool
-// - OPTIONAL ordered path:
-//      workers format into OutBatch from an unbounded output pool,
-//      publish OutBatch by id into AssociativeChannel,
-//      writer takes next_id and writes in-order, returns OutBatch to pool.
-// - Clean shutdown on error: abort result channel, close input channel/pools.
 
+/*
+ - Producers parse and push batches to in_chan_
+ - Workers pop, run stages, return batch to free_in pool
+ - OPTIONAL ordered path:
+      workers format into OutBatch from an unbounded output pool,
+      publish OutBatch by id into AssociativeChannel,
+      writer takes next_id and writes in-order, returns OutBatch to pool.
+ - Clean shutdown on error: abort result channel, close input channel/pools.
+*/
 class StreamingEngine {
 public:
     using Batch    = SamAlignments;
@@ -95,15 +96,10 @@ public:
 
         // ---------- Pool sizing ----------
         const size_t in_pool_sz =
-            (cfg_.in_pool_size != 0) ? cfg_.in_pool_size : (P + C);
+            (cfg_.in_pool_size != 0) ? cfg_.in_pool_size : (2*P + C);
 
         // ---------- Batch pool ----------
-        BoundedChannel<Batch> free_in(in_pool_sz);
-        for (size_t i = 0; i < in_pool_sz; ++i) {
-            if (!free_in.push(Batch(hdr))) {
-                throw std::runtime_error("run_streaming: free_in closed during prefill");
-            }
-        }
+        BoundedPool<Batch> free_in(in_pool_sz, [&](){return Batch(hdr);}, P+C);
 
         // ---------- Ordered writer plumbing ----------
         // Output pool: unbounded pool of reusable OutBatch buffers
@@ -281,7 +277,7 @@ public:
             });
         }
 
-        // ---------- Producers (UNCHANGED SEMANTICS) ----------
+        // ---------- Producers ----------
         std::vector<std::jthread> producers;
         producers.reserve(P);
 

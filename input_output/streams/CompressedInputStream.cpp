@@ -9,7 +9,6 @@
 #include <tbb/parallel_for.h>
 
 // ---- GZIP/BGZF header probes ------------------------------------------------
-
 bool CompressedInputStream::isValidFile(PlainInputStream& stream) {
     // Read the first 18 bytes (enough for GZIP + BGZF extra header)
     std::string hdr(18, '\0');
@@ -81,7 +80,6 @@ struct BlockPlan {
 };
 
 //[[clang::optnone]]
-// Put this helper in the .cpp (static) or as a private method.
 static inline bool logical_end_reached_for_next_read(uint64_t comp_off,
                                                      uint64_t end_coff,
                                                      uint32_t end_uoff)
@@ -98,7 +96,6 @@ static inline bool logical_end_reached_for_next_read(uint64_t comp_off,
     return false;
 }
 
-//[[clang::optnone]]
 ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t length)
 {
     if (length < 0 || offset < 0)
@@ -119,8 +116,7 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
     size_t total = 0;
 
     while (want > 0) {
-
-        // ---- 1) serve from stash if any available ----
+        // 1) serve from stash if any available
         const size_t avail = (stash_pos_ < stash_.size()) ? (stash_.size() - stash_pos_) : 0;
         if (avail) {
             const size_t n = std::min(want, avail);
@@ -131,10 +127,9 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             continue;
         }
 
-        // ---- 2) need to produce more bytes ----
+        // 2) need to produce more bytes
         compact_stash_();
 
-        // IMPORTANT: decide logical end BEFORE planning
         if (has_end_ && logical_end_reached_for_next_read(comp_off_, end_coff_, end_uoff_)) {
             seen_end_ = true;
             break;
@@ -205,7 +200,7 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
         // If nothing planned, set the correct termination flag and exit.
         if (plan.empty()) {
             if (saw_phys_eof)  seen_eof_block_ = true;
-            if (saw_logical_end) seen_end_ = true;   // <<< THIS was missing / crucial
+            if (saw_logical_end) seen_end_ = true;
             break;
         }
 
@@ -216,7 +211,7 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
         stash_.resize(old_size + batch_bytes);
         uint8_t* const stash_base = stash_.data() + old_size;
 
-        // -------- READ COMPRESSED (serial) --------
+        // READ COMPRESSED (serial)
         for (size_t i = 0; i < plan.size(); ++i) {
             const auto& j = plan[i];
             const ssize_t rn = ::pread(fd_, comp_pool[i].data(), j.comp_size, static_cast<off_t>(j.off));
@@ -226,11 +221,10 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
                 throw std::runtime_error("CompressedInputStream: short read on BGZF block");
         }
 
-        // -------- PARALLEL DECOMPRESS --------
+        // DECOMPRESS
         std::vector<size_t> produced(plan.size(), 0);
         std::vector<int>    status(plan.size(), 0); // 0 ok, 1 eof, -1 error
 
-        //tbb::parallel_for(size_t(0), plan.size(), [&](size_t i){
         for (size_t i = 0; i < plan.size(); ++i) {
             const auto& j = plan[i];
             if (j.decomp_size == 0) { status[i] = 1; produced[i] = 0; break; }
@@ -253,9 +247,9 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             }
             status[i] = 0;
             produced[i] = j.decomp_size;
-        }//);
+        }
 
-        // -------- VALIDATION + ADVANCE + CLAMP END --------
+        // VALIDATION + ADVANCE + CLAMP END
         size_t appended = 0;
         bool   hit_end_block = false;
 
@@ -300,7 +294,6 @@ ssize_t CompressedInputStream::read(std::string& buffer, ssize_t offset, ssize_t
             throw std::runtime_error("read(): no progress (unexpected)");
         }
     }
-
     return static_cast<ssize_t>(total);
 }
 
@@ -355,13 +348,10 @@ void CompressedInputStream::close() {
     }
 }
 
-// If you call seek_virtual(), you likely want to reset seen_end_ too.
-
 static inline bool voff_ge(uint64_t coff, uint32_t uoff, uint64_t end_coff, uint32_t end_uoff) {
     return (coff > end_coff) || (coff == end_coff && uoff >= end_uoff);
 }
 
-// If you call seek_virtual(), you likely want to reset seen_end_ too.
 void CompressedInputStream::seek_virtual(uint64_t voff) {
     const uint64_t coff = voff >> 16;
     const uint32_t uoff = static_cast<uint32_t>(voff & 0xFFFFu);
@@ -426,7 +416,7 @@ void CompressedInputStream::clear_virtual_end() {
 
 // Probe BGZF block header/footer to get both compressed and decompressed sizes.
 BGZFBlockInfo CompressedInputStream::probe_bgzf_block_size_(uint64_t off) {
-    // --- Step 1: read minimal header ---
+    // 1) Read minimal header
     uint8_t hdr[18];
     ssize_t n = ::pread(fd_, hdr, sizeof(hdr), static_cast<off_t>(off));
     if (n == 0) {
@@ -439,7 +429,7 @@ BGZFBlockInfo CompressedInputStream::probe_bgzf_block_size_(uint64_t off) {
 
     const uint16_t xlen = le16_(hdr + 10);
 
-    // --- Step 2: read FEXTRA to find BSIZE ---
+    // 2) Read FEXTRA to find BSIZE
     std::vector<uint8_t> extra(xlen);
     if (::pread(fd_, extra.data(), xlen, static_cast<off_t>(off + 12)) != static_cast<ssize_t>(xlen)) {
         throw std::runtime_error("Short GZIP extra");
@@ -461,10 +451,10 @@ BGZFBlockInfo CompressedInputStream::probe_bgzf_block_size_(uint64_t off) {
     }
     if (bsize == 0) throw std::runtime_error("BGZF 'BC' subfield not found");
 
-    // --- Step 3: compressed size = BSIZE + 1 ---
+    // 3) Compressed size = BSIZE + 1
     const std::size_t comp_size = static_cast<std::size_t>(bsize) + 1u;
 
-    // --- Step 4: read last 4 bytes for ISIZE (uncompressed size) ---
+    // 4) Read last 4 bytes for ISIZE (uncompressed size)
     uint8_t isize_bytes[4];
     off_t footer_off = static_cast<off_t>(off + comp_size - 4);
     if (::pread(fd_, isize_bytes, 4, footer_off) != 4) {
@@ -526,48 +516,27 @@ bool CompressedInputStream::inflate_one_bgzf_block_() {
 
 bool CompressedInputStream::inflate_bgzf_block_(BlockMeta& block) {
     // Read the compressed block
-    //tmp_comp_.resize(comp_size);
     const ssize_t rn = ::pread(fd_, tmp_comp_.data() + block.comp_off, block.comp_size, static_cast<off_t>(comp_off_));
     if (rn != static_cast<ssize_t>(block.comp_size)) {
         throw std::runtime_error("Short read on BGZF block");
     }
 
-#ifdef USE_LIBDEFLATE
-        std::size_t out_n = 0;
-        const auto st = libdeflate_gzip_decompress(
-            decomp_,
-            tmp_comp_.data() + block.comp_off, block.comp_size,
-            tmp_decomp_.data() + block.decomp_off, block.decomp_size,
-            &out_n
-        );
-        if (st != LIBDEFLATE_SUCCESS) {
-            throw std::runtime_error("libdeflate: decompress failed");
-        }
-#else
-    // Reset zlib stream for a new gzip member
-    if (inflateReset2(&zstrm_, 16 + MAX_WBITS) != Z_OK) {
-        throw std::runtime_error("zlib inflateReset2 failed");
+    std::size_t out_n = 0;
+    const auto st = libdeflate_gzip_decompress(
+        decomp_,
+        tmp_comp_.data() + block.comp_off, block.comp_size,
+        tmp_decomp_.data() + block.decomp_off, block.decomp_size,
+        &out_n
+    );
+    if (st != LIBDEFLATE_SUCCESS) {
+        throw std::runtime_error("libdeflate: decompress failed");
     }
-    zstrm_.next_in   = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(tmp_comp_.data()));
-    zstrm_.avail_in  = static_cast<uInt>(tmp_comp_.size());
-    zstrm_.next_out  = reinterpret_cast<Bytef*>(tmp_decomp_.data());
-    zstrm_.avail_out = static_cast<uInt>(tmp_decomp_.size());
-
-    int ret = inflate(&zstrm_, Z_FINISH);
-    if (ret != Z_STREAM_END && ret != Z_OK) {
-        throw std::runtime_error("zlib inflate failed");
-    }
-    const std::size_t out_n = tmp_decomp_.size() - zstrm_.avail_out;
-#endif
 
     if (out_n == 0) {
-        // BGZF EOF marker block (valid, zero-byte payload)
-        //tmp_decomp_.clear();
         return false;
     }
 
     // Append to stash (compact first if needed)
-    //compact_stash_();
     const std::size_t old = stash_.size();
     stash_.resize(old + out_n);
     std::memcpy(stash_.data() + old, tmp_decomp_.data(), out_n);

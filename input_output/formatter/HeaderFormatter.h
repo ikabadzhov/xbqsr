@@ -1,11 +1,10 @@
-#ifndef GENOMICPIPELINE_SAMHEADERFORMATTER_H
-#define GENOMICPIPELINE_SAMHEADERFORMATTER_H
+#pragma once
 
 #include <string>
 #include "../../sam_data_structures/sam_header_fields/SequenceField.h"
 #include "../../sam_data_structures/SamHeader.h"
 
-class SamHeaderFormatter {
+class HeaderFormatter {
 public:
     static void FormatSamHeader(Header &hdr, std::string& line);
 
@@ -19,6 +18,3 @@ private:
     static void join(char sep, std::vector<std::string>& fields, std::string& line);
 
 };
-
-
-#endif //GENOMICPIPELINE_SAMHEADERFORMATTER_H

@@ -14,9 +14,9 @@ int32_t ReadGroupsDictionary::add(const ReadGroupRecord& rg) {
 
     // Maintain RG -> PU map in lockstep with readGroups
     if (rg.containsAttribute("PU")) {
-        const std::string& pu = rg.getAttribute("PU");     // <-- correct key
+        const std::string& pu = rg.getAttribute("PU");
         const int32_t pu_id = pu_.add(pu);
-        rgId2PuId_.push_back(pu_id);                       // single write here
+        rgId2PuId_.push_back(pu_id);
     } else {
         rgId2PuId_.push_back(EMPTY_STRING);
     }
@@ -26,34 +26,11 @@ int32_t ReadGroupsDictionary::add(const ReadGroupRecord& rg) {
 }
 
 int32_t ReadGroupsDictionary::getId(const std::string& s) const {
-    /*if (s.empty()) return EMPTY_STRING;
-    for (int32_t i = 0; i < idToString.size(); ++i) {
-        if (idToString[i] == s) {
-            return i;
-        }
-    }
-    return STRING_NOT_FOUND;*/
     if (s.empty()) return EMPTY_STRING;
     if (auto it = stringToId.find(s); it != stringToId.end())
         return it->second;
     return STRING_NOT_FOUND;
 }
-
-int32_t ReadGroupsDictionary::getId(std::string_view s) const {
-   /* if (s.empty()) return EMPTY_STRING;
-    for (int32_t i = 0; i < idToString.size(); ++i) {
-        if (static_cast<std::string_view>(idToString[i]) == s) {
-            return i;
-        }
-    }
-    return STRING_NOT_FOUND;*/
-    /*
-    if (s.empty()) return EMPTY_STRING;
-    if (auto it = stringToId.find(s); it != stringToId.end())
-        return it->second;
-    return STRING_NOT_FOUND;*/
-}
-
 
 const std::string& ReadGroupsDictionary::getString(int32_t id) const {
     if (id < 0 || static_cast<size_t>(id) >= idToString.size())

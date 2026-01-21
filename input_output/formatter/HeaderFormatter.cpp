@@ -1,6 +1,6 @@
-#include "SamHeaderFormatter.h"
+#include "HeaderFormatter.h"
 
-void SamHeaderFormatter::FormatSamHeader(Header &hdr, std::string& line) {
+void HeaderFormatter::FormatSamHeader(Header &hdr, std::string& line) {
     writeHDLine(hdr, line);
     line.append(1,'\n');
     for (auto& sequenceRecord : hdr.getSequenceDictionary().getAll()) {
@@ -21,7 +21,7 @@ void SamHeaderFormatter::FormatSamHeader(Header &hdr, std::string& line) {
     }
 }
 
-void SamHeaderFormatter::writeHDLine(Header &hdr, std::string& line) {
+void HeaderFormatter::writeHDLine(Header &hdr, std::string& line) {
     std::vector<std::string> fields(hdr.getHD().getAllAttributes().size() + 1);
     fields[0].append("@HD");
     encodeTags(hdr.getHD(), fields, 1);
@@ -30,7 +30,7 @@ void SamHeaderFormatter::writeHDLine(Header &hdr, std::string& line) {
 }
 
 
-void SamHeaderFormatter::getSQLine(const SequenceRecord& sequenceRecord, std::string& line) {
+void HeaderFormatter::getSQLine(const SequenceRecord& sequenceRecord, std::string& line) {
     size_t numAttributes = sequenceRecord.getAllAttributes().size();
     std::vector<std::string> fields(3 + numAttributes);
 
@@ -42,7 +42,7 @@ void SamHeaderFormatter::getSQLine(const SequenceRecord& sequenceRecord, std::st
     join('\t', fields, line);
 }
 
-void SamHeaderFormatter::getPGLine(const ProgramRecord& program, std::string& line) {
+void HeaderFormatter::getPGLine(const ProgramRecord& program, std::string& line) {
     size_t numAttributes = program.getAllAttributes().size();
     std::vector<std::string> fields(2 + numAttributes);
 
@@ -53,7 +53,7 @@ void SamHeaderFormatter::getPGLine(const ProgramRecord& program, std::string& li
     join('\t', fields, line);
 }
 
-void SamHeaderFormatter::getRGLine(const ReadGroupRecord& readGroupRecord, std::string& line) {
+void HeaderFormatter::getRGLine(const ReadGroupRecord& readGroupRecord, std::string& line) {
     size_t numAttributes = readGroupRecord.getAllAttributes().size();
     std::vector<std::string> fields(2 + numAttributes);
 
@@ -64,7 +64,7 @@ void SamHeaderFormatter::getRGLine(const ReadGroupRecord& readGroupRecord, std::
     join('\t', fields, line);
 }
 
-void SamHeaderFormatter::encodeTags(const SamHeaderRecord& record, std::vector<std::string>& fields, size_t offset) {
+void HeaderFormatter::encodeTags(const SamHeaderRecord& record, std::vector<std::string>& fields, size_t offset) {
     record.getAllAttributes().for_each([&](const std::string& key, const std::string& value){
         fields[offset].append(key);
         fields[offset].append(":");
@@ -73,7 +73,7 @@ void SamHeaderFormatter::encodeTags(const SamHeaderRecord& record, std::vector<s
     });
 }
 
-void SamHeaderFormatter::join(char sep, std::vector<std::string>& fields, std::string& line) {
+void HeaderFormatter::join(char sep, std::vector<std::string>& fields, std::string& line) {
     bool first_field = true;
     for (auto& s : fields) {
         if (!first_field) {

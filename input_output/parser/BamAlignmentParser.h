@@ -13,8 +13,6 @@ public:
     size_t aux;
 };
 
-
-
 class BamAlignmentParser {
 public:
     static void ParseBamAlignmentFromSlice(std::string_view bytes, SamAlignments &reads, size_t idx);

@@ -2,14 +2,10 @@
 #include <numeric>
 #include <algorithm>
 #include <chrono>
-#include <optional>
 #include <vector>
 #include <memory>
 #include <stdexcept>
-
 #include <tbb/parallel_for.h>
-#include <tbb/parallel_sort.h>
-
 #include "Utils.h"
 #include "input_output/alignment_io/AlignmentIO.h"
 #include "input_output/bam_io/BamReader.h"
@@ -18,12 +14,9 @@
 #include "file_format/MappedFasta.h"
 #include "bqsr/BQSR.h"
 #include "sam_data_structures/SamAlignments.h"
-#include "pipeline/BoundedChannel.h"
 #include "pipeline/StreamingEngine.h"
-#include "bam_data_structures/BamHeader.h"
 #include "input_output/alignment_io/AlignmentReaderFactory.h"
 #include "input_output/alignment_io/AlignmentWriterFactory.h"
-#include "sam_data_structures/sam_fields/Tag.h"
 #include "timer/Timer.h"
 
 #include <sycl/queue.hpp>
@@ -32,44 +25,11 @@
 #include "device/batch.h"
 #include "input_output/bam_io/BaiReader.h"
 #include "logger/Logger.h"
-
-// NOTE: Executors headers no longer needed
-// #include "pipeline/BQSRApplyExecutor.h"
-// #include "pipeline/BQSRRecalExecutor.h"
-
-#include "input_output/bam_io/BamWriter.h"
-#include "input_output/formatter/BamBatchFormatter.h"
-#include "sycl_parallel_library/intervalsmove/intervalmove.h"
-#include "sycl_parallel_library/scan/scan.h"
 #include "sycl_parallel_library/segmented_reduce/segreduce.h"
-#include "sycl_parallel_library/segmented_scan/segscan.h"
-#include "timer/ProfilerIO.h"
 
 using namespace std;
 using namespace chrono;
 
-static inline int32_t le_i32(const uint8_t* p) {
-    return int32_t(uint32_t(p[0]) |
-                   (uint32_t(p[1]) << 8) |
-                   (uint32_t(p[2]) << 16) |
-                   (uint32_t(p[3]) << 24));
-}
-
-system_clock::time_point now() {
-    return std::chrono::high_resolution_clock::now();
-}
-
-static std::mutex gpu_mtx;
-
-
-size_t get_duration(std::chrono::system_clock::time_point start,
-                    std::chrono::system_clock::time_point end) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-}
-
-// -------------------------
-// Context structs (no IExecutor)
-// -------------------------
 struct RecalCtx {
     sycl::device dev_;
     sycl::queue  q_;
@@ -85,8 +45,14 @@ struct ApplyCtx {
     std::shared_ptr<BaseRecalibratorTables> tables_;
 };
 
-//[[clang::optnone]]
+
 int main(int argc, char **argv) {
+    Timer t_main;
+    t_main.reset();
+
+    Timer t_init;
+    t_init.reset();
+
     Arguments args = parse_arguments(argc, argv);
 
     // Enumerate all GPU devices available
@@ -114,7 +80,7 @@ int main(int argc, char **argv) {
     // Determine which devices to use
     std::vector<int> selected_devices;
     if (args.gpu_use_all) {
-        for (size_t i = 2; i < gpus.size(); ++i) {
+        for (size_t i = 0; i < gpus.size(); ++i) {
             selected_devices.push_back(static_cast<int>(i));
         }
     } else {
@@ -148,14 +114,12 @@ int main(int argc, char **argv) {
     std::vector<StreamingEngine::FinalizeFn> finals;
 
     // ---------- Build slices / readers ----------
-    const size_t n_producers = 3 * selected_devices.size();
+    const size_t n_producers = 9; //3 * selected_devices.size();
     const std::string bai_path = find_bai_path(args.input_bam);
 
     auto bai = load_bai_linear(bai_path);
     std::vector<std::pair<VOff,VOff>> ranges =
         split_ranges_equal_by_compressed_span(bai.ioffsets, 512UL*1024*1024);
-
-    //print_ranges_estimated_decompressed_over(args.input_bam, ranges);
 
     Logger::getLogger().log(LOG_INFO, "Partitioning slices");
 
@@ -283,7 +247,7 @@ int main(int argc, char **argv) {
             });
 
             ctx.quantize_level_ = quantize_level;
-            ctx.sqqList_        = sqqList;
+            ctx.sqqList_ = sqqList;
 
             ctx.tables_ = std::make_shared<BaseRecalibratorTables>(bqsrTableConfig, ctx.q_);
             ctx.tables_->initializeDeviceMemory();
@@ -295,11 +259,8 @@ int main(int argc, char **argv) {
         stages.emplace_back("BQSR-Apply",
             [&apply_ctxs](SamAlignments& batch, size_t wid) {
                 auto& ctx = apply_ctxs[wid];
-
-                // If ApplyBQSR expects a mutable copy, keep it local:
                 auto sqqLocal = ctx.sqqList_;
                 ctx.tables_->ApplyBQSR(batch, ctx.quantize_level_, sqqLocal);
-
                 ctx.q_.wait_and_throw();
             }
         );
@@ -309,7 +270,6 @@ int main(int argc, char **argv) {
 
     // ---------- Build and run engine ----------
     StreamingEngine::Config cfg;
-    //cfg.channel_capacity = 4;
 
     // workers = number of devices used for the chosen mode
     if (args.is_recalibrate()) cfg.workers = recal_ctxs.size();
@@ -319,15 +279,18 @@ int main(int argc, char **argv) {
         throw std::runtime_error("No workers created (workers would be 0)");
     }
 
-    Timer t;
-    t.reset();
+    auto time_to_init_sec = t_init.elapsed();
+    Timer t_pipeline;
+    t_pipeline.reset();
 
+    Logger::getLogger().log(LOG_INFO, "Starting pipeline");
     StreamingEngine engine(cfg, std::move(stages), std::move(finals), alignmentWriter);
 
-    // If your current StreamingEngine still takes `executors`, you must remove that parameter.
     engine.run_streaming(alignmentReader, header);
 
-    Logger::getLogger().log(LOG_INFO, "Time to run all stages: " + std::to_string(t.elapsed()) + " sec");
-    ProfilerIO::instance().report();
+    std::cout << "REPORT" << std::endl;
+    std::cout <<  "\tTime to initialize pipeline: " + std::to_string(time_to_init_sec) + " sec" << std::endl;
+    std::cout << "\tTime to run full pipeline: " + std::to_string(t_pipeline.elapsed()) + " sec" << std::endl;
+    std::cout << "Time to run end-to-end: " + std::to_string(t_main.elapsed()) + " sec" << std::endl;
     return 0;
 }

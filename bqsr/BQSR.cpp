@@ -22,11 +22,8 @@
 #include "../device/batch.h"
 #include "../sycl_parallel_library/segmented_reduce/segreduce.h"
 #include "../sycl_parallel_library/sorting/mergesort.h"
-#include "../sycl_parallel_library/sorting/external_sort.h"
 #include "../logger/Logger.h"
-#include "../timer/Profiler.h"
 #include "apply_bqsr/ApplyBqsrFunctions.h"
-#include "apply_bqsr/ApplyBqsrKernelData.h"
 
 const uint32_t lowQualityTail = 2;
 
@@ -310,7 +307,7 @@ void BaseRecalibrator::close() {
 void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     Timer timerAll;
     if (reads.GetAlnsNum() == 0) return;
-    auto& profiler = ProfilerBQSR::instance();
+
     timerAll.reset();
     Timer t;
 
@@ -319,15 +316,11 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     int32_t maxIdx = reads.GetAlnsNum();
     auto& hdr = reads.GetHdr();
 
-    profiler.start(StageId::AddReadGroup);
 
-    //reads.TMP.reads_group_covariate_.resize(maxIdx);
     std::vector<int32_t> reads_group_covariate_(maxIdx);
     tbb::parallel_for(0, maxIdx, [&](size_t idx) {
         reads_group_covariate_[idx] = readGroupCovariateId(hdr, reads, idx);
     });
-
-    profiler.stop(StageId::AddReadGroup);
 
     auto *clippedSequences = reads.SEQ.Data();
     auto *clippedSequencesPtrs = reads.SEQ.Ptrs().data();
@@ -349,8 +342,6 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     t.reset();
 
     size_t batch_size = reads.GetAlnsNum();
-
-    profiler.start(StageId::RecalibrateBatches);
 
     t.reset();
     auto* cigar = reads.CIGAR.Data();
@@ -389,10 +380,7 @@ void BaseRecalibrator::Recalibrate(SamAlignments& reads) {
     q_.wait_and_throw();
     Logger::getLogger().log(LOG_INFO, "Time to batch process alignments: " + std::to_string(t.elapsed()));
 
-    profiler.stop(StageId::RecalibrateBatches);
-
     Logger::getLogger().log(LOG_INFO, "Total time recalibrate: " + std::to_string(timerAll.elapsed()) + "sec");
-    profiler.report();
 }
 
 BaseRecalibrator::BaseRecalibrator(MappedFasta &referenceGenome, KnownSites& knownSites,

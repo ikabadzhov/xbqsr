@@ -1,8 +1,6 @@
 #include "BufferReader.h"
-#include "../../timer/ProfilerIO.h"
 
 void BufferReader::fill(std::unique_ptr<InputStream> &in) {
-    IO_PROFILE_SCOPE(DataLoading);
     pos = 0;
     count = in->read(buffer, pos, buffer.size() - pos);
 }

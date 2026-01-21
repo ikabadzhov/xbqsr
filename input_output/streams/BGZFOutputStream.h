@@ -15,6 +15,7 @@
 #include <atomic>
 
 #include "OutputStream.h"
+#include "../../pipeline/UnboundedChannel.h"
 #include <libdeflate.h>
 
 class BGZFOutputStream final : public OutputStream {
@@ -101,6 +102,8 @@ private:
 
     // current assembling (producer thread only)
     std::unique_ptr<BgzfTask> cur_;
+
+    UnboundedChannel<std::unique_ptr<BgzfTask>> free_pool_;
 
 private:
     static inline void put_u16le(uint8_t* p, uint16_t x) noexcept {

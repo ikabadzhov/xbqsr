@@ -5,8 +5,7 @@
 #include <mutex>
 #include "BamReader.h"
 #include "BamUtilsIO.h"
-#include "../../timer/ProfilerIO.h"
-#include "../parser/SamHeaderParser.h"
+#include "../parser/HeaderParser.h"
 #include "../parser/BamAlignmentParser.h"
 #include "../../timer/TraceTimeline.h"
 
@@ -14,9 +13,9 @@ void BamReader::Close() {
     this->in->close();
 }
 
-// Parse BAM header: fills your header structure in `reads`.
+// Parse BAM header: fills header structure in reads.
 // Throws std::runtime_error on invalid/truncated headers.
-// Parse BAM header: fills your header structure in `reads`.
+// Parse BAM header: fills your header structure in reads.
 // Throws std::runtime_error on invalid/truncated headers.
 static void parse_bam_header(std::unique_ptr<InputStream>& in, Header& hdr) {
 
@@ -171,23 +170,19 @@ void BamReader::ParseHeader(Header &hdr) {
     header_done_ = true;
 }
 
-//[[clang::optnone]]
 static void load_batch(const std::shared_ptr<InputBatchBam> &bt, std::unique_ptr<InputStream> &in) {
-    //auto& profiler = ProfilerIO::instance();
-    //profiler.start(IOStageId::DataLoading);
     bt->buffer.fill(in);
-    //profiler.stop(IOStageId::DataLoading);
 };
 
 // --- Carry state for a single BAM record across batches ---
 struct Carry {
     enum Stage : uint8_t { ReadLen, ReadBody } stage = ReadLen;
-    int32_t need  = sizeof(int32_t);   // bytes still needed for current stage
-    int32_t block = -1;                // block_size after decoding
-    std::string bin;                   // accumulation buffer
-    int32_t max_block_seen = 0; // <== NEW: track largest block
+    int32_t need  = sizeof(int32_t);    // bytes still needed for current stage
+    int32_t block = -1;                 // block_size after decoding
+    std::string bin;                    // accumulation buffer
+    int32_t max_block_seen = 0;         // track largest block
 
-    Carry() { bin.reserve(4096); }     // small upfront reserve reduces churn
+    Carry() { bin.reserve(4096); }  // small upfront reserve reduces churn
 } ;
 
 
@@ -201,26 +196,22 @@ public:
 };
 
 struct BatchTmpVector {
-    std::vector<RecordSpan>         boundaries;
+    std::vector<RecordSpan> boundaries;
     std::vector<VariableLenFieldsVar> fieldsOff;
     std::vector<VariableLenFieldsVar> fieldsSizes;
     std::vector<VariableLenFieldsVar> outputOffsets;
 };
 
 //[[clang::optnone]]
-static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
+[[maybe_unused]]
+static void process_batch_parallel(const std::shared_ptr<InputBatchBam>& bp,
                           SamAlignments& reads,
                           size_t& alnsRead,
                           Carry& carry,
                           BatchTmpVector& scratch) {
 
-    IO_PROFILE_SCOPE(ProcessBatch);
-
     auto& buf        = bp->buffer;
     auto& boundaries = scratch.boundaries;
-
-    // ---- Phase 1: collect record spans (boundaries) ----
-    IO_PROFILE_START(GetBoundaries);
 
     boundaries.clear();
 
@@ -277,10 +268,7 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
             continue;
         }
 
-        // Here: ReadBody complete → we have exactly one full BAM record
-
-        //ensure_capacity(reads, alnsRead, 10 * (1 << 20));
-
+        // ReadBody complete: we have exactly one full BAM record
         if (carry.bin.empty()) {
             // Record is contiguous in this chunk
             if (boundaries.size() == boundaries.capacity()) {
@@ -309,12 +297,6 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
         carry.block = -1;
     }
 
-    IO_PROFILE_STOP(GetBoundaries);
-
-    //ensure_capacity(reads, alnsRead, 10 * (1 << 20));
-
-    IO_PROFILE_START(EnsureCapacity);
-
     const size_t nrecs = boundaries.size();
     if (nrecs == 0) {
         bp->n_processed = alnsRead;
@@ -325,10 +307,6 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
         reads.EnsureCapacity(nrecs);
     }
     reads.Resize(nrecs);
-    IO_PROFILE_STOP(EnsureCapacity);
-
-    // ---- Phase 2: parse simple types ----
-    IO_PROFILE_START(ParseSimpleTypes);
 
     auto& fieldsOff   = scratch.fieldsOff;
     auto& fieldsSizes = scratch.fieldsSizes;
@@ -340,32 +318,23 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
     fieldsOff.resize(nrecs);
     fieldsSizes.resize(nrecs + 1);  // +1 for scan sentinel
 
-    for (size_t recIdx = 0; recIdx < nrecs; ++recIdx) {
-        //0UL, nrecs,
-        //[&boundaries, &reads, &fieldsOff, &fieldsSizes](size_t recIdx) {
-            auto begin = boundaries[recIdx].chunkPtr;
-            auto end   = begin + boundaries[recIdx].size;
-            size_t aIdx = boundaries[recIdx].alnIdx;
+    tbb::parallel_for(0UL, nrecs, [&boundaries, &reads, &fieldsOff, &fieldsSizes](size_t recIdx) {
+        auto begin = boundaries[recIdx].chunkPtr;
+        auto end   = begin + boundaries[recIdx].size;
+        size_t aIdx = boundaries[recIdx].alnIdx;
 
-            if (begin != nullptr) {
-                BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
-                    {begin, end}, reads, aIdx,
-                    fieldsOff[recIdx], fieldsSizes[recIdx]
-                );
-            } else if (!boundaries[recIdx].bin.empty()) {
-                BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
-                    boundaries[recIdx].bin, reads, aIdx,
-                    fieldsOff[recIdx], fieldsSizes[recIdx]
-                );
-            }
+        if (begin != nullptr) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
+                {begin, end}, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx]
+            );
+        } else if (!boundaries[recIdx].bin.empty()) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
+                boundaries[recIdx].bin, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx]
+            );
         }
-    //);
-    IO_PROFILE_STOP(ParseSimpleTypes);
-
-    // ---- Phase 3: scan + complex types ----
-    IO_PROFILE_START(ParseComplexTypes);
-
-    IO_PROFILE_START(Scan);
+    });
 
     auto& outputOffsets = scratch.outputOffsets;
     if (outputOffsets.capacity() < nrecs + 1)
@@ -388,14 +357,6 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
             };
         }
     );
-    IO_PROFILE_STOP(Scan);
-    IO_PROFILE_START(Allocation);
-
-    // Allocate/resize backing storage once per batch
-    /*reads.SEQ.ReserveData(outputOffsets.back().seq);
-    reads.QUAL.ReserveData(outputOffsets.back().qual);
-    reads.CIGAR.ReserveData(outputOffsets.back().cigar);
-    reads.QNAME.ReserveData(outputOffsets.back().qname);*/
 
     if (outputOffsets.back().seq > reads.SEQ.CapacityData()) {
         reads.SEQ.ReserveData(outputOffsets.back().seq);//.EnsureCapacity(nrecs * (1<<20));
@@ -415,15 +376,207 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
     reads.QNAME.ResizeData(outputOffsets.back().qname);
 
     OptionalFields& opt = reads.TAGS;
-    //opt.tagArena.reserve(outputOffsets.back().aux);
+
     if (outputOffsets.back().aux > reads.TAGS.CapacityData()) {
         reads.TAGS.ReserveData(outputOffsets.back().aux);//.EnsureCapacity(nrecs * (1<<20));
     }
     opt.tagArena.resize(outputOffsets.back().aux);
 
-    IO_PROFILE_STOP(Allocation);
+    tbb::parallel_for (0UL, nrecs, [&](size_t recIdx) {
+        auto begin = boundaries[recIdx].chunkPtr;
+        auto end   = begin + boundaries[recIdx].size;
+        size_t aIdx = boundaries[recIdx].alnIdx;
 
-    IO_PROFILE_START(ParallelFor);
+        if (begin != nullptr) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
+                {begin, end}, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx], outputOffsets[recIdx]
+            );
+        } else if (!boundaries[recIdx].bin.empty()) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceComplexTypes(
+                boundaries[recIdx].bin, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx], outputOffsets[recIdx]
+            );
+        }
+    });
+
+    bp->n_processed = alnsRead;
+}
+
+static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
+                          SamAlignments& reads,
+                          size_t& alnsRead,
+                          Carry& carry,
+                          BatchTmpVector& scratch) {
+
+    auto& buf= bp->buffer;
+    auto& boundaries = scratch.boundaries;
+
+    boundaries.clear();
+
+    // Initial guess: 1024 records per batch; capacity only grows, never shrinks.
+    if (boundaries.capacity() < 1024)
+        boundaries.reserve(1024);
+
+    while (buf.has_data()) {
+        const size_t avail = buf.available_data();
+        if (avail == 0) break;
+
+        const size_t take = static_cast<size_t>(
+            std::min<int64_t>(carry.need, static_cast<int64_t>(avail))
+        );
+        size_t got = 0;
+
+        std::string_view chunk = buf.getslice(take, got);
+        if (got == 0) break;
+
+        carry.need -= static_cast<int32_t>(got);
+        // If we were already accumulating (spanning case) and just finished, append final bytes now.
+        if (!carry.bin.empty() && carry.need == 0) {
+            carry.bin.append(chunk.data(), got);
+        }
+
+        if (carry.need > 0) {
+            // Still in ReadLen/ReadBody state: accumulate partial data and bail to loader
+            carry.bin.append(chunk.data(), got);
+            break;
+        }
+
+        if (carry.stage == Carry::ReadLen) {
+            const unsigned char* p = carry.bin.empty()
+                    ? reinterpret_cast<const unsigned char*>(chunk.data())
+                    : reinterpret_cast<const unsigned char*>(carry.bin.data());
+
+            int32_t block_size = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24);
+
+            if (block_size <= 0 || block_size > (64 * 1024 * 1024)) {
+                throw std::runtime_error("Invalid BAM block_size");
+            }
+
+            carry.block = block_size;
+            carry.need  = block_size;
+            carry.stage = Carry::ReadBody;
+
+            // Reserve capacity once when we see a new maximum, but don't reserve every time
+            if (block_size > carry.max_block_seen) {
+                carry.max_block_seen = block_size;
+                carry.bin.reserve(block_size);
+            }
+
+            carry.bin.clear();  // Clear for next ReadBody stage
+            continue;
+        }
+
+        // ReadBody complete: we have exactly one full BAM record
+        if (carry.bin.empty()) {
+            // Record is contiguous in this chunk
+            if (boundaries.size() == boundaries.capacity()) {
+                boundaries.reserve(boundaries.capacity() * 2);
+            }
+
+            boundaries.emplace_back(chunk.data(), chunk.size(), alnsRead);
+        } else {
+            // Record spans previous and current chunks: stored in carry.bin
+            carry.bin.append(chunk.data(), got);
+            RecordSpan rec(nullptr, 0, alnsRead, carry.bin);
+
+            if (boundaries.size() == boundaries.capacity())
+                boundaries.reserve(boundaries.capacity() * 2);
+
+            boundaries.push_back(std::move(rec));
+            carry.bin.clear();
+        }
+
+        ++alnsRead;
+
+        // Prepare for next record
+        carry.bin.clear();
+        carry.stage = Carry::ReadLen;
+        carry.need  = sizeof(int32_t);
+        carry.block = -1;
+    }
+
+    const size_t nrecs = boundaries.size();
+    if (nrecs == 0) {
+        bp->n_processed = alnsRead;
+        return;
+    }
+
+    if (nrecs > reads.Capacity()) {
+        reads.EnsureCapacity(nrecs);
+    }
+    reads.Resize(nrecs);
+
+    auto& fieldsOff   = scratch.fieldsOff;
+    auto& fieldsSizes = scratch.fieldsSizes;
+
+    // capacities
+    if (fieldsOff.capacity()   < nrecs)   fieldsOff.reserve(nrecs);
+    if (fieldsSizes.capacity() < nrecs)   fieldsSizes.reserve(nrecs);
+
+    fieldsOff.resize(nrecs);
+    fieldsSizes.resize(nrecs);
+
+    auto& outputOffsets = scratch.outputOffsets;
+    if (outputOffsets.capacity() < nrecs + 1) outputOffsets.reserve(nrecs + 1);
+    outputOffsets.resize(nrecs + 1);
+
+    VariableLenFieldsVar tot{0,0,0,0,0};
+
+    for (size_t recIdx = 0; recIdx < nrecs; ++recIdx) {
+        outputOffsets[recIdx] = tot;   // Exclusive prefix for this record
+
+        auto begin = boundaries[recIdx].chunkPtr;
+        auto end   = begin + boundaries[recIdx].size;
+        size_t aIdx = boundaries[recIdx].alnIdx;
+
+        if (begin != nullptr) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
+                {begin, end}, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx]
+            );
+        } else if (!boundaries[recIdx].bin.empty()) {
+            BamAlignmentParser::ParseBamAlignmentFromSliceSimpleTypes(
+                boundaries[recIdx].bin, reads, aIdx,
+                fieldsOff[recIdx], fieldsSizes[recIdx]
+            );
+        }
+
+        // advance totals
+        tot = VariableLenFieldsVar{
+            tot.qname + fieldsSizes[recIdx].qname,
+            tot.cigar + fieldsSizes[recIdx].cigar,
+            tot.seq   + fieldsSizes[recIdx].seq,
+            tot.qual  + fieldsSizes[recIdx].qual,
+            tot.aux   + fieldsSizes[recIdx].aux
+        };
+    }
+
+    outputOffsets[nrecs] = tot; // totals for allocation
+
+    if (outputOffsets.back().seq > reads.SEQ.CapacityData()) {
+        reads.SEQ.ReserveData(outputOffsets.back().seq);
+    }
+    if (outputOffsets.back().qual > reads.QUAL.CapacityData()) {
+        reads.QUAL.ReserveData(outputOffsets.back().qual);
+    }
+    if (outputOffsets.back().cigar > reads.CIGAR.CapacityData()) {
+        reads.CIGAR.ReserveData(outputOffsets.back().cigar);
+    }
+    if (outputOffsets.back().qname > reads.QNAME.CapacityData()) {
+        reads.QNAME.ReserveData(outputOffsets.back().qname);
+    }
+    reads.SEQ.ResizeData(outputOffsets.back().seq);
+    reads.QUAL.ResizeData(outputOffsets.back().qual);
+    reads.CIGAR.ResizeData(outputOffsets.back().cigar);
+    reads.QNAME.ResizeData(outputOffsets.back().qname);
+
+    OptionalFields& opt = reads.TAGS;
+
+    if (outputOffsets.back().aux > reads.TAGS.CapacityData()) {
+        reads.TAGS.ReserveData(outputOffsets.back().aux);//.EnsureCapacity(nrecs * (1<<20));
+    }
+    opt.tagArena.resize(outputOffsets.back().aux);
 
     for (size_t recIdx = 0; recIdx < nrecs; ++recIdx) {
             auto begin = boundaries[recIdx].chunkPtr;
@@ -442,14 +595,10 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
                 );
             }
         }
-    //);
-    IO_PROFILE_STOP(ParallelFor);
-    IO_PROFILE_STOP(ParseComplexTypes);
 
     bp->n_processed = alnsRead;
 }
 
-// In BamReader.cpp
 void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::function<SamAlignments()> get_batch,
                                        std::function<void(SamAlignments&&)> on_batch)
 {
@@ -540,7 +689,6 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
         cv.notify_one();
 
         // Fill current_batch from batch_process
-
         {
             BQS_TRACE_SCOPE("bam_reader:process_batch");
             process_batch(batch_process, current_batch, alnsRead, carry, scratch);
@@ -550,8 +698,6 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
         if (alnsRead > 0) {
             current_batch.SetAlnsNum(alnsRead);
             current_batch.SetBatchId(slice_id_process);
-            //current_batch->EnsureCapacity(alnsRead);
-            //current_batch->Resize(alnsRead);
             on_batch(std::move(current_batch));
             current_batch = get_batch();
             current_batch.SetAlnsNum(0);
@@ -575,21 +721,11 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
     { std::lock_guard lk(m); stop = true; }
     loader.request_stop();
     cv.notify_one();
-    // loader.join(); // No need with jthread
 }
 
 void BamReader::SeekVirtual(VOff voff_start, VOff voff_end) {
     auto* cis = dynamic_cast<CompressedInputStream*>(in.get());
     if (!cis) throw std::runtime_error("SeekVirtual requires CompressedInputStream (BGZF)");
-    VOff slice_beg = slices_[nextSlice].start;
-    VOff slice_end = slices_[nextSlice].end;
-
-    /*std::cout << "[Slice " << nextSlice << "] beg coff=" << voff_coff(slice_beg)
-          << " uoff=" << voff_uoff(slice_beg)
-          << " end coff=" << voff_coff(slice_end)
-          << " uoff=" << voff_uoff(slice_end)
-          << std::endl;*/
-
     cis->set_virtual_end(voff_end);
     cis->seek_virtual(voff_start);
     header_done_ = true;

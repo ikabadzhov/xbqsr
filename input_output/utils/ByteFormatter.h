@@ -5,7 +5,7 @@
 
 class ByteFormatter {
     std::string& bytes;
-    //size_t index = 0;
+
 public:
     explicit ByteFormatter(std::string& bytes) : bytes(bytes) {};
     void appendInt32(int32_t val);

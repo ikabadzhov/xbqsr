@@ -93,8 +93,6 @@ add_executable(bqsr
 		input_output/bam_io/BamReader.h
 		input_output/bam_io/BamWriter.cpp
 		input_output/bam_io/BamWriter.h
-		bam_data_structures/BamHeader.cpp
-		bam_data_structures/BamHeader.h
 		input_output/alignment_io/AlignmentReaderFactory.cpp
 		input_output/alignment_io/AlignmentReaderFactory.h
 		input_output/streams/CompressedInputStream.cpp
@@ -114,33 +112,23 @@ add_executable(bqsr
 		sam_data_structures/sam_header_fields/ProgramField.h
 		input_output/parser/ParsedHeaderLine.cpp
 		input_output/parser/ParsedHeaderLine.h
-		input_output/parser/SamHeaderParser.cpp
-		input_output/parser/SamHeaderParser.h
+		input_output/parser/HeaderParser.cpp
+		input_output/parser/HeaderParser.h
 		sam_data_structures/sam_header_fields/SamHeaderRecord.h
 		sam_data_structures/sam_header_fields/FileMetadata.h
 		sam_data_structures/sam_header_fields/SequenceField.cpp
 		sam_data_structures/sam_header_fields/ProgramField.cpp
 		data_types/QnameStringMapper.cpp
-		input_output/parser/SamAlignmentParser.cpp
-		input_output/parser/SamAlignmentParser.h
-		input_output/formatter/SamHeaderFormatter.cpp
-		input_output/formatter/SamHeaderFormatter.h
-		input_output/formatter/SamAlignmentFormatter.cpp
-		input_output/formatter/SamAlignmentFormatter.h
 		sam_data_structures/sam_header_fields/SamHeaderRecord.cpp
 		input_output/parser/BamAlignmentParser.cpp
 		input_output/parser/BamAlignmentParser.h
-		input_output/formatter/BamAlignmentFormatter.cpp
-		input_output/formatter/BamAlignmentFormatter.h
 		input_output/formatter/BamHeaderFormatter.cpp
-		input_output/formatter/BamHeaderFormatter.h
+		input_output/formatter/BamHeaderFormatter.cpp
+		input_output/formatter/HeaderFormatter.cpp
+		input_output/formatter/HeaderFormatter.h
 		input_output/alignment_io/AlignmentWriterFactory.cpp
 		input_output/alignment_io/AlignmentWriterFactory.h
 		input_output/streams/OutputStream.h
-		input_output/streams/PlainOutputStream.cpp
-		input_output/streams/PlainOutputStream.h
-		input_output/streams/CompressedOutputStream.cpp
-		input_output/streams/CompressedOutputStream.h
 		input_output/utils/ByteFormatter.cpp
 		input_output/utils/ByteFormatter.h
 		data_types/SparseVector.cpp
@@ -172,7 +160,6 @@ add_executable(bqsr
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsData.h
 		bqsr/compute_vectors_for_covariates/ComputeCovariateVectorsData.cpp
 		bqsr/UtilsBQSR.cpp
-		input_output/parser/IOBatch.cpp
 		input_output/parser/IOBatch.h
 		Config.cpp
 		Config.h
@@ -184,9 +171,6 @@ add_executable(bqsr
 		tileinfo/tileInfo.cpp
 		tileinfo/tileInfo.h
 		input_output/bam_io/BamUtilsIO.h
-		timer/Profiler.cpp
-		timer/Profiler.h
-		timer/ProfilerIO.h
 		input_output/streams/BGZFOutputStream.cpp
 		input_output/streams/BGZFOutputStream.h
 		bqsr/BaseRecalibratorTablesAccessor.cpp
@@ -197,13 +181,12 @@ add_executable(bqsr
 		data_types/FlatHashMap.h
 		data_types/TransparentStringTypes.h
 		input_output/bam_io/BaiReader.h
-		pipeline/BQSRRecalExecutor.h
-		pipeline/IExecutor.h
-        input_output/formatter/BamBatchFormatter.cpp
+		input_output/formatter/BamBatchFormatter.cpp
 		input_output/formatter/BamBatchFormatter.h
 		pipeline/AssociativeChannel.h
 		pipeline/UnboundedChannel.h
 		timer/TraceTimeline.h
+		pipeline/BoundedPool.h
 )
 
 # ------------------------------------------------------------------------------

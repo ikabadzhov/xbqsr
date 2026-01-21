@@ -8,7 +8,6 @@
 #include "../../sycl_parallel_library/intervalsmove/intervalmove.h"
 #include "ComputeCovariateVectorsData.h"
 #include "../../logger/Logger.h"
-#include "../../timer/Profiler.h"
 
 // Quality
 template <typename IndexT, typename ValueT>
@@ -171,7 +170,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     if (batch->_n <= 0) {
         return;
     }
-    auto& profile = ProfilerBQSR::instance();
+
     Timer t;
     auto d_recalibrated = batch->_d_data.d_recalibrated;
     auto d_sequences = batch->_d_data.d_sequences;
@@ -229,7 +228,6 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
 
     assert(batch->_d_data.table_sz < 2000000000);
 
-    profile.start(StageId::ClipSequences);
     t.reset();
     batch->_q_process.parallel_for<class SetOffset>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
         auto base = d_cigar_ptr[idx].start - offset_cigar;
@@ -291,10 +289,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
      batch->_q_process.wait_and_throw();
      Logger::getLogger().log(LOG_DEBUG, "    [Clip Sequences kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-     profile.stop(StageId::ClipSequences);
-
      t.reset();
-     profile.start(StageId::ComputeSkipVector);
+
      Timer t2;
      t2.reset();
      batch->_q_process.parallel_for<class ComputeSkipSliceVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
@@ -366,9 +362,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
      });
      batch->_q_process.wait_and_throw();
      Logger::getLogger().log(LOG_DEBUG, "        [ComputeSkipSliceVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-     profile.stop(StageId::ComputeSkipVector);
 
-     profile.start(StageId::ComputeSNPSVector);
      t2.reset();
      {
          batch->_q_process.parallel_for<class ComputeSNPSVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
@@ -388,9 +382,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
      }
 
      Logger::getLogger().log(LOG_DEBUG, "        [ComputeSNPSVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-     profile.stop(StageId::ComputeSNPSVector);
 
-     profile.start(StageId::ComputeContextVector);
      t2.reset();
 
      batch->_q_process.parallel_for<class ComputeContextKeysVector>(sycl::range<1>(batch->_n), [=](sycl::id<1> idx) {
@@ -412,12 +404,8 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
      batch->_q_process.wait_and_throw();
 
      Logger::getLogger().log(LOG_DEBUG, "        [ComputeContextKeysVector kernel] Time: " + std::to_string(t2.elapsed()) + " sec");
-     profile.stop(StageId::ComputeContextVector);
 
      Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateVectors kernel] Time: " + std::to_string(t.elapsed()) + " sec");
-
-     profile.start(StageId::UpdateIndexes);
-     profile.start(StageId::Preprocessing);
 
      t.reset();
      {
@@ -450,8 +438,7 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     Logger::getLogger().log(LOG_DEBUG, "    [CopyingSequencesOffsets kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
     t.reset();
-    profile.stop(StageId::Preprocessing);
-    profile.start(StageId::EmitIndexes);
+
 
        {
         enum { nt = 128, vt = 7, vt0 = 5, nv = nt*vt };
@@ -552,30 +539,21 @@ void compute_skip_slice_kernel(std::shared_ptr<Batch<ComputeSkipSliceKernelData,
     batch->_q_process.wait_and_throw();
      Logger::getLogger().log(LOG_DEBUG, "    [ComputeCovariateTableIndexes kernel] Time: " + std::to_string(t.elapsed()) + " sec");
 
-     profile.stop(StageId::EmitIndexes);
-
-     profile.start(StageId::AggregateQual);
      aggregate_quality(batch->_q_process,
                    d_quality_table_indexes, d_quality_table_vals, batch->_d_data.table_sz,
                    d_quality_table, d_quality_table_sz);
      batch->_q_process.wait_and_throw();
-     profile.stop(StageId::AggregateQual);
 
-     profile.start(StageId::AggregateCycle);
      aggregate_cycle(batch->_q_process,
                      d_cycle_table_indexes, d_cycle_table_vals, batch->_d_data.table_sz,
                      d_cycle_table, d_cycle_table_sz);
      batch->_q_process.wait_and_throw();
-     profile.stop(StageId::AggregateCycle);
 
-     profile.start(StageId::AggregateContext);
      aggregate_context(batch->_q_process,
                        d_context_table_indexes, d_context_table_vals, batch->_d_data.table_sz,
                        d_context_table, d_context_table_sz);
 
      batch->_q_process.wait_and_throw();
-     profile.stop(StageId::AggregateContext);
 
      Logger::getLogger().log(LOG_DEBUG, "    [Tables updates] Time: " + std::to_string(t.elapsed()) + " sec");
-     profile.stop(StageId::UpdateIndexes);
 }

@@ -1,9 +1,7 @@
-#ifndef GENOMICPIPELINE_OUTPUTSTREAM_H
-#define GENOMICPIPELINE_OUTPUTSTREAM_H
+#pragma once
 
 #include <cstdint>
 #include <span>
-#include <string>
 
 class OutputStream {
 public:
@@ -11,9 +9,5 @@ public:
     virtual size_t write(std::span<const uint8_t> data) = 0;
     virtual void close() = 0;
     virtual void flush() = 0;
-    // Virtual destructor
-    virtual ~OutputStream() = default;
+    virtual ~OutputStream() = default; // Virtual destructor
 };
-
-
-#endif //GENOMICPIPELINE_OUTPUTSTREAM_H

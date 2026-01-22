@@ -1,7 +1,10 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -9,8 +12,17 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
+
+#include <errno.h>
+#include <unistd.h>
 
 #include <tbb/parallel_sort.h>
+
+#include "../../logger/Logger.h"
+#include "../../timer/Timer.h"
 
 using VOff = uint64_t;
 
@@ -168,15 +180,11 @@ inline std::string _infer_bam_path_from_last_bai() {
     return p.string();
 
   // Case 2: file.bai came from bam_path replace_extension(".bai")
-  // We try adding ".bam"
   fs::path bam = p;
   bam.replace_extension(".bam");
   if (fs::exists(bam))
     return bam.string();
 
-  // Fallback: maybe the bam had the same basename and lives next to bai
-  // (If this fails, user can still pass bam explicitly to print function;
-  // slicing won't work)
   throw std::runtime_error("Could not infer BAM path from BAI path: " +
                            bai.string());
 }
@@ -290,16 +298,198 @@ struct _BgzfLightIndex {
   std::vector<uint64_t> prefix_ubytes; // prefix sum at block start
 };
 
-inline _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
-                                               uint64_t coff_start) {
-  FILE *f = std::fopen(bam_path.c_str(), "rb");
-  if (!f)
-    throw std::runtime_error("Cannot open BAM: " + bam_path);
+// ------------------------------------------------------------
+// Minimal patch: robust tri-state header parser from memory
+// ------------------------------------------------------------
+enum class _ParseStatus : uint8_t { OK, NEED_MORE, CORRUPT };
 
-  if (fseeko(f, (off_t)coff_start, SEEK_SET) != 0) {
-    std::fclose(f);
-    throw std::runtime_error("fseeko failed seeking BAM");
+struct _BlockInfo {
+  uint32_t c_size = 0;
+  uint32_t u_size = 0;
+  _ParseStatus st = _ParseStatus::CORRUPT;
+};
+
+static inline _BlockInfo _parse_bgzf_header_mem_robust(const uint8_t* p, size_t remaining) {
+  _BlockInfo out;
+
+  // Need at least gzip(10) + XLEN(2)
+  if (remaining < 12) {
+    out.st = _ParseStatus::NEED_MORE;
+    return out;
   }
+
+  if (p[0] != 0x1f || p[1] != 0x8b || p[2] != 0x08) {
+    out.st = _ParseStatus::CORRUPT;
+    return out;
+  }
+
+  const uint8_t flg = p[3];
+  if ((flg & 0x04) == 0) { // FEXTRA required for BGZF
+    out.st = _ParseStatus::CORRUPT;
+    return out;
+  }
+
+  // XLEN
+  const uint16_t xlen = uint16_t(p[10]) | (uint16_t(p[11]) << 8);
+  if (remaining < 12ull + xlen) {
+    out.st = _ParseStatus::NEED_MORE;
+    return out;
+  }
+
+  // Scan extra for "BC" + SLEN==2 to read BSIZE
+  size_t off = 12;
+  const size_t extra_end = 12ull + xlen;
+  bool found_bc = false;
+  uint16_t bsize = 0;
+
+  while (off + 4 <= extra_end) {
+    const uint8_t si1 = p[off + 0];
+    const uint8_t si2 = p[off + 1];
+    const uint16_t slen = uint16_t(p[off + 2]) | (uint16_t(p[off + 3]) << 8);
+    off += 4;
+
+    if (off + slen > extra_end) { // malformed extra
+      out.st = _ParseStatus::CORRUPT;
+      return out;
+    }
+
+    if (si1 == 'B' && si2 == 'C' && slen == 2) {
+      bsize = uint16_t(p[off + 0]) | (uint16_t(p[off + 1]) << 8);
+      found_bc = true;
+      break;
+    }
+    off += slen;
+  }
+
+  if (!found_bc) {
+    out.st = _ParseStatus::CORRUPT;
+    return out;
+  }
+
+  const uint32_t c_size = uint32_t(bsize) + 1u;
+
+  // Practical BGZF bounds: blocks are <= 64KiB.
+  if (c_size < 26u || c_size > 65536u) {
+    out.st = _ParseStatus::CORRUPT;
+    return out;
+  }
+
+  if (remaining < c_size) {
+    out.st = _ParseStatus::NEED_MORE;
+    return out;
+  }
+
+  const uint32_t isize =
+      uint32_t(p[c_size - 4]) |
+      (uint32_t(p[c_size - 3]) << 8) |
+      (uint32_t(p[c_size - 2]) << 16) |
+      (uint32_t(p[c_size - 1]) << 24);
+
+  if (isize > 65536u) {
+    out.st = _ParseStatus::CORRUPT;
+    return out;
+  }
+
+  out.c_size = c_size;
+  out.u_size = isize;
+  out.st = _ParseStatus::OK;
+  return out;
+}
+
+inline _BgzfLightIndex _build_bgzf_light_index(const std::string& bam_path,
+                                               uint64_t coff_start) {
+  // ---- O_DIRECT constraints (typical) ----
+  constexpr size_t kAlign = 4096;                 // common logical block size
+  constexpr size_t kBufSize = (size_t)1 << 30;    // 1 GiB, divisible by 4096
+
+  int fd = ::open(bam_path.c_str(), O_RDONLY | O_DIRECT);
+  if (fd < 0) {
+    throw std::runtime_error("Cannot open BAM with O_DIRECT: " + bam_path +
+                             " (errno=" + std::to_string(errno) + ")");
+  }
+
+  // Align read offset down to kAlign for O_DIRECT.
+  const uint64_t aligned_start = (coff_start / kAlign) * kAlign;
+  const uint64_t skip_first = coff_start - aligned_start;
+
+  // Allocate two aligned buffers
+  void* buf0 = nullptr;
+  void* buf1 = nullptr;
+  if (::posix_memalign(&buf0, kAlign, kBufSize) != 0 || buf0 == nullptr) {
+    ::close(fd);
+    throw std::runtime_error("posix_memalign failed for buf0");
+  }
+  if (::posix_memalign(&buf1, kAlign, kBufSize) != 0 || buf1 == nullptr) {
+    ::free(buf0);
+    ::close(fd);
+    throw std::runtime_error("posix_memalign failed for buf1");
+  }
+
+  struct Slot {
+    uint8_t* data = nullptr;
+    size_t   nbytes = 0;         // bytes actually read
+    uint64_t file_off = 0;       // file offset corresponding to data[0]
+    bool     ready = false;
+    bool     eof = false;
+  };
+
+  Slot slots[2];
+  slots[0].data = static_cast<uint8_t*>(buf0);
+  slots[1].data = static_cast<uint8_t*>(buf1);
+
+  std::mutex m;
+  std::condition_variable cv_ready;
+  std::condition_variable cv_free;
+  bool slot_free[2] = {true, true};
+  bool done = false;
+
+  std::atomic<bool> loader_error{false};
+  std::string loader_errmsg;
+
+  uint64_t next_off = aligned_start;
+
+  // Async loader thread: fills slots in alternating fashion
+  std::thread loader([&] {
+    int cur = 0;
+    while (true) {
+      // Wait for a free slot
+      {
+        std::unique_lock<std::mutex> lk(m);
+        cv_free.wait(lk, [&]{ return done || slot_free[cur]; });
+        if (done) return;
+        slot_free[cur] = false;
+      }
+
+      slots[cur].file_off = next_off;
+
+      // pread with O_DIRECT: buffer + size + offset must be aligned
+      ssize_t r = ::pread(fd, slots[cur].data, kBufSize, (off_t)next_off);
+      if (r < 0) {
+        loader_error = true;
+        loader_errmsg = "pread failed (errno=" + std::to_string(errno) + ")";
+        {
+          std::lock_guard<std::mutex> lk(m);
+          slots[cur].nbytes = 0;
+          slots[cur].eof = true;
+          slots[cur].ready = true;
+        }
+        cv_ready.notify_one();
+        return;
+      }
+
+      slots[cur].nbytes = (size_t)r;
+      slots[cur].eof = (r == 0);
+      slots[cur].ready = true;
+
+      next_off += (uint64_t)r;
+
+      cv_ready.notify_one();
+
+      if (r == 0) return;
+
+      cur ^= 1;
+    }
+  });
 
   _BgzfLightIndex idx;
   idx.coff.reserve(1 << 20);
@@ -308,36 +498,230 @@ inline _BgzfLightIndex _build_bgzf_light_index(const std::string &bam_path,
 
   uint64_t prefix = 0;
 
+  // ---- Minimal patch: robust carry handling across buffers ----
+  std::vector<uint8_t> carry;
+  carry.reserve(65536);
+  uint64_t carry_off = 0; // file offset corresponding to carry[0]
+
+  int consume = 0;
+  bool first_chunk = true;
+
   while (true) {
-    off_t pos = ftello(f);
-    if (pos < 0) {
-      std::fclose(f);
-      throw std::runtime_error("ftello failed");
+    {
+      std::unique_lock<std::mutex> lk(m);
+      cv_ready.wait(lk, [&]{ return slots[consume].ready; });
     }
-    uint64_t coff = uint64_t(pos);
 
-    // EOF check
-    int c = std::fgetc(f);
-    if (c == EOF)
-      break;
-    std::ungetc(c, f);
+    if (loader_error) {
+      {
+        std::lock_guard<std::mutex> lk(m);
+        done = true;
+      }
+      cv_free.notify_all();
+      if (loader.joinable()) loader.join();
+      ::free(buf0);
+      ::free(buf1);
+      ::close(fd);
+      throw std::runtime_error("Async loader error: " + loader_errmsg);
+    }
 
-    auto [cbytes, ubytes] = read_bgzf_block_cbytes_ubytes(f);
+    const size_t n = slots[consume].nbytes;
+    const uint64_t file_off = slots[consume].file_off;
+    const bool eof = slots[consume].eof;
 
-    idx.coff.push_back(coff);
-    idx.ubytes.push_back(ubytes);
-    idx.prefix_ubytes.push_back(prefix);
-    prefix += uint64_t(ubytes);
-    (void)cbytes; // file position already advanced
+    const uint8_t* base = slots[consume].data;
+    const uint8_t* ptr  = base;
+    const uint8_t* end  = base + n;
+
+    // Apply initial skip once (due to aligned_start)
+    if (first_chunk && skip_first > 0) {
+      if (skip_first >= n) {
+        ptr = end;
+      } else {
+        ptr += skip_first;
+      }
+      first_chunk = false;
+    } else {
+      first_chunk = false;
+    }
+
+    // 1) If we have a carry (partial block), complete it robustly.
+    // 1) If we have a carry (partial block), complete exactly ONE block.
+    // IMPORTANT: never slurp arbitrary bytes into carry, or you'll drop data and desync.
+    if (!carry.empty()) {
+      while (true) {
+        // Step A: ensure we can read XLEN (need 12 bytes)
+        if (carry.size() < 12) {
+          const size_t need = 12 - carry.size();
+          const size_t take = std::min<size_t>(need, (size_t)(end - ptr));
+          if (take == 0) break; // wait next chunk
+          carry.insert(carry.end(), ptr, ptr + take);
+          ptr += take;
+          continue;
+        }
+
+        // Basic sanity (like B): if carry doesn't look like gzip+FEXTRA -> corruption/desync
+        if (!(carry[0] == 0x1f && carry[1] == 0x8b && carry[2] == 0x08) ||
+            ((carry[3] & 0x04) == 0)) {
+          throw std::runtime_error("Corrupt BGZF stream at buffer boundary (bad magic/flags)");
+        }
+
+        const uint16_t xlen = uint16_t(carry[10]) | (uint16_t(carry[11]) << 8);
+        const size_t need_extra = 12ull + xlen;
+        if (need_extra > 65536ull) {
+          throw std::runtime_error("Corrupt BGZF: XLEN implies >64KiB header");
+        }
+
+        // Step B: ensure extra is present
+        if (carry.size() < need_extra) {
+          const size_t need = need_extra - carry.size();
+          const size_t take = std::min<size_t>(need, (size_t)(end - ptr));
+          if (take == 0) break; // wait next chunk
+          carry.insert(carry.end(), ptr, ptr + take);
+          ptr += take;
+          continue;
+        }
+
+        // Step C: now we can parse BC/BSIZE (might still need more for whole block)
+        _BlockInfo h = _parse_bgzf_header_mem_robust(carry.data(), carry.size());
+        if (h.st == _ParseStatus::CORRUPT) {
+          throw std::runtime_error("Corrupt BGZF stream at buffer boundary (bad extra/BC/BSIZE)");
+        }
+
+        // If parser still says NEED_MORE here, it can only mean: need full block bytes (c_size)
+        // But in that case h.c_size will still be 0 (by our struct init). So we must compute c_size
+        // by parsing again after ensuring enough bytes — easiest: attempt to grow to 64KiB cap safely.
+        if (h.st == _ParseStatus::NEED_MORE) {
+          // We don't know c_size yet (parser didn't produce it), so append a small amount and retry.
+          // This path is extremely rare; choose a small step to avoid slurping multiple blocks.
+          const size_t step = 256; // tiny step; overhead negligible
+          const size_t take = std::min<size_t>(step, (size_t)(end - ptr));
+          if (take == 0) break;
+          carry.insert(carry.end(), ptr, ptr + take);
+          ptr += take;
+          if (carry.size() > 65536u) {
+            throw std::runtime_error("Carry exceeded BGZF max block size (desync/corrupt BAM?)");
+          }
+          continue;
+        }
+
+        // Step D: ensure we have the whole block (exactly)
+        if (carry.size() < h.c_size) {
+          const size_t need = (size_t)h.c_size - carry.size();
+          const size_t take = std::min<size_t>(need, (size_t)(end - ptr));
+          if (take == 0) break; // wait next chunk
+          carry.insert(carry.end(), ptr, ptr + take);
+          ptr += take;
+          continue;
+        }
+
+        // Now carry contains >= full block; with the steps above it should be == full block.
+        // If it's larger (shouldn't happen), keep leftover bytes (do NOT drop them).
+        idx.coff.push_back(carry_off);
+        idx.ubytes.push_back(h.u_size);
+        idx.prefix_ubytes.push_back(prefix);
+        prefix += uint64_t(h.u_size);
+
+        if (carry.size() == h.c_size) {
+          carry.clear();
+        } else {
+          // Keep leftover (rare, but safe)
+          std::vector<uint8_t> leftover;
+          leftover.assign(carry.begin() + h.c_size, carry.end());
+          carry.swap(leftover);
+          carry_off += uint64_t(h.c_size);
+          // And loop again: the leftover might contain more blocks or partial bytes
+          continue;
+        }
+
+        break; // carry cleared; proceed to parse current chunk from ptr
+      }
+    }
+
+    // 2) Parse full blocks in current chunk.
+    while (ptr < end) {
+      const size_t rem = (size_t)(end - ptr);
+
+      _BlockInfo h = _parse_bgzf_header_mem_robust(ptr, rem);
+      if (h.st == _ParseStatus::OK) {
+        const uint64_t coff = file_off + uint64_t(ptr - base);
+        idx.coff.push_back(coff);
+        idx.ubytes.push_back(h.u_size);
+        idx.prefix_ubytes.push_back(prefix);
+        prefix += uint64_t(h.u_size);
+
+        ptr += h.c_size;
+        continue;
+      }
+
+      if (h.st == _ParseStatus::NEED_MORE) {
+        // Save tail as carry (partial header or partial block)
+        carry_off = file_off + uint64_t(ptr - base);
+        carry.assign(ptr, end);
+        ptr = end;
+        break;
+      }
+
+      // CORRUPT at this position means we lost sync (or BAM is corrupt).
+      throw std::runtime_error("Corrupt BGZF stream while scanning (bad magic/extra/BC)");
+    }
+
+    // Mark slot free and move on
+    {
+      std::lock_guard<std::mutex> lk(m);
+      slots[consume].ready = false;
+      slots[consume].nbytes = 0;
+      slots[consume].eof = false;
+      slot_free[consume] = true;
+    }
+    cv_free.notify_one();
+
+    if (eof) break;
+
+    consume ^= 1;
   }
 
-  std::fclose(f);
+  // EOF: carry must be empty or a complete final block (rare). Otherwise truncated.
+  if (!carry.empty()) {
+    _BlockInfo h = _parse_bgzf_header_mem_robust(carry.data(), carry.size());
+    if (h.st == _ParseStatus::OK && carry.size() == h.c_size) {
+      idx.coff.push_back(carry_off);
+      idx.ubytes.push_back(h.u_size);
+      idx.prefix_ubytes.push_back(prefix);
+      prefix += uint64_t(h.u_size);
+      carry.clear();
+    } else {
+      ::free(buf0);
+      ::free(buf1);
+      {
+        std::lock_guard<std::mutex> lk(m);
+        done = true;
+      }
+      cv_free.notify_all();
+      if (loader.joinable()) loader.join();
+      ::close(fd);
+      throw std::runtime_error("BAM appears truncated: incomplete BGZF block at EOF");
+    }
+  }
+
+  // Stop loader if still running (normally it ends on EOF)
+  {
+    std::lock_guard<std::mutex> lk(m);
+    done = true;
+  }
+  cv_free.notify_all();
+  if (loader.joinable()) loader.join();
+
+  ::free(buf0);
+  ::free(buf1);
+  ::close(fd);
+
   return idx;
 }
 
 inline VOff _compute_eof_voff_from_light_index(const _BgzfLightIndex &bg,
                                                uint64_t coff_start_global) {
-  // coff_start_global is unused in this form; kept for clarity.
+  (void)coff_start_global;
   if (bg.coff.empty())
     throw std::runtime_error("BGZF index empty (scan produced no blocks)");
   size_t last = bg.coff.size() - 1;
@@ -348,7 +732,6 @@ inline VOff _compute_eof_voff_from_light_index(const _BgzfLightIndex &bg,
 // Snap helpers for over-estimating “full blocks touched” between two voffs.
 inline size_t _snap_beg_block_idx(const _BgzfLightIndex &bg,
                                   uint64_t coff_beg) {
-  // want last block start <= coff_beg
   auto it = std::upper_bound(bg.coff.begin(), bg.coff.end(), coff_beg);
   if (it == bg.coff.begin())
     return 0;
@@ -356,7 +739,6 @@ inline size_t _snap_beg_block_idx(const _BgzfLightIndex &bg,
 }
 inline size_t _snap_end_block_idx(const _BgzfLightIndex &bg,
                                   uint64_t coff_end) {
-  // want first block start >= coff_end
   auto it = std::lower_bound(bg.coff.begin(), bg.coff.end(), coff_end);
   if (it == bg.coff.end())
     return bg.coff.size() - 1;
@@ -373,7 +755,6 @@ inline uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
   size_t ib = _snap_beg_block_idx(bg, cb);
   size_t ie = _snap_end_block_idx(bg, ce);
 
-  // bytes from start of ib to end of ie (inclusive)
   uint64_t start_prefix = bg.prefix_ubytes[ib];
   uint64_t end_prefix = bg.prefix_ubytes[ie] + uint64_t(bg.ubytes[ie]);
   if (end_prefix < start_prefix)
@@ -394,37 +775,30 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
   if (ioffsets.size() < 2)
     throw std::runtime_error("Not enough BAI ioffsets to create ranges");
 
-  // Interpret as "max slice size" (MiB) to satisfy the new requirement without
-  // signature changes.
+  Timer t;
+  t.reset();
+
   const uint64_t limit_bytes = max_size;
 
-  // Need BAM path to estimate decompressed bytes (block ISIZE). Infer from last
-  // loaded BAI path.
-  //const std::string bam_path = _infer_bam_path_from_last_bai();
-
-  // Build a light BGZF index starting at the first ioffset coff.
   const uint64_t coff_min = voff_coff(ioffsets.front());
   _BgzfLightIndex bg = _build_bgzf_light_index(bam_path, coff_min);
 
-  // EOF virtual offset (for unmapped/no-coor tail)
-  const VOff eof_voff = _compute_eof_voff_from_light_index(bg, coff_min);
+  Logger::getLogger().log(LOG_DEBUG,"_build_bgzf_light_index: " + std::to_string(t.elapsed()));
+  t.reset();
 
-  // We will create ranges using ioffsets as candidate cut points.
-  // Overestimate sizes by counting full BGZF blocks touched.
+  const VOff eof_voff = _compute_eof_voff_from_light_index(bg, coff_min);
+  Logger::getLogger().log(LOG_DEBUG,"_compute_eof_voff_from_light_index: " + std::to_string(t.elapsed()));
+  t.reset();
+
   std::vector<std::pair<VOff, VOff>> ranges;
   ranges.reserve(1024);
 
   size_t start_idx = 0;
   while (start_idx + 1 < ioffsets.size()) {
-    // If even the smallest next step exceeds limit, we still must make
-    // progress. We'll choose the largest end_idx such that span <= limit (or
-    // start_idx+1 if none).
     size_t lo = start_idx + 1;
     size_t hi = ioffsets.size() - 1;
     size_t best = lo;
 
-    // If the limit is tiny, we may only be able to take one step.
-    // Binary search for the farthest end within limit (monotonic in end_idx).
     while (lo <= hi) {
       size_t mid = lo + (hi - lo) / 2;
 
@@ -440,7 +814,6 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
       }
     }
 
-    // Ensure progress
     if (best <= start_idx)
       best = start_idx + 1;
 
@@ -448,8 +821,6 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
     start_idx = best;
   }
 
-  // If the last produced end does not reach EOF, append tail to capture
-  // unmapped/no-coor.
   if (!ranges.empty()) {
     VOff last_end = ranges.back().second;
     if (voff_coff(last_end) < voff_coff(eof_voff) ||
@@ -458,11 +829,12 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
       ranges.emplace_back(last_end, eof_voff);
     }
   } else {
-    // Degenerate: if ranges empty, make a single range to EOF
     ranges.emplace_back(ioffsets.front(), eof_voff);
   }
 
-  // Remove empty/degenerate ranges
+  Logger::getLogger().log(LOG_DEBUG,"while loop: " + std::to_string(t.elapsed()));
+  t.reset();
+
   ranges.erase(std::remove_if(ranges.begin(), ranges.end(),
                               [](auto &r) { return r.first >= r.second; }),
                ranges.end());
@@ -470,6 +842,27 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
   if (ranges.empty())
     throw std::runtime_error("Range split produced no ranges");
 
+  Logger::getLogger().log(LOG_DEBUG,"erase empty/degenerate ranges: " + std::to_string(t.elapsed()));
+  t.reset();
+  return ranges;
+}
+
+inline std::vector<std::pair<VOff, VOff>>
+split_ranges_from_ioffsets_adjacent(const std::vector<VOff>& ioffsets) {
+  if (ioffsets.size() < 2)
+    throw std::runtime_error("Not enough BAI ioffsets to create ranges");
+
+  std::vector<std::pair<VOff,VOff>> ranges;
+  ranges.reserve(ioffsets.size() - 1);
+
+  for (size_t i = 0; i + 1 < ioffsets.size(); ++i) {
+    VOff a = ioffsets[i];
+    VOff b = ioffsets[i + 1];
+    if (a < b) ranges.emplace_back(a, b);
+  }
+
+  if (ranges.empty())
+    throw std::runtime_error("Range split produced no ranges");
   return ranges;
 }
 
@@ -477,10 +870,6 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
 // Existing estimator/printing (unchanged interface)
 // Uses per-range scanning; fine for debug printing.
 // ------------------------------------------------------------
-
-// Over-estimated decompressed bytes in [beg_voff, end_voff):
-// counts full BGZF blocks touched between coff(beg) and coff(end), inclusive of
-// start/end blocks.
 inline uint64_t estimate_range_decompressed_bytes_over(FILE *f, VOff beg_voff,
                                                        VOff end_voff) {
   const uint64_t coff_b = voff_coff(beg_voff);

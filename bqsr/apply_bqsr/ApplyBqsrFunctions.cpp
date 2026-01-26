@@ -145,18 +145,23 @@ const int32_t globalQualityScorePrior = -1;
 
                             size_t buffer_idx = 0;
 
-                            if(key.cycleCovariate < 0) {
-                                buffer_idx = key.readGroupCovariate * table_acc.nQualScore * (table_acc.nContextCov + 1) * table_acc.nCycleCov + key.qual * (table_acc.nContextCov + 1) * table_acc.nCycleCov +
-                                        (key.contextCovariate + 1) * table_acc.nCycleCov + (-1 * key.cycleCovariate + bqsr::defaults::MAX_CYCLE - 1);
-                            } else {
-                                buffer_idx = key.readGroupCovariate * table_acc.nQualScore * (table_acc.nContextCov + 1) * table_acc.nCycleCov + key.qual * (table_acc.nContextCov + 1) * table_acc.nCycleCov +
-                                        (key.contextCovariate + 1) * table_acc.nCycleCov + key.cycleCovariate;
-                            }
+                            // Precompute strides (compiler should hoist this if invariant, but explicit is better)
+                            const int32_t strideCtx   = (int32_t)table_acc.nCycleCov;
+                            const int32_t strideQual  = (int32_t)(table_acc.nContextCov + 1) * strideCtx;
+                            const int32_t strideRG    = (int32_t)table_acc.nQualScore * strideQual;
+                            const int32_t maxCycleVal = (int32_t)bqsr::defaults::MAX_CYCLE;
+
+                            int32_t cyc = key.cycleCovariate;
+                            int32_t cyc_idx = (cyc < 0) ? (-cyc + maxCycleVal - 1) : cyc;
+
+                            buffer_idx = (size_t)key.readGroupCovariate * strideRG +
+                                         (size_t)key.qual * strideQual +
+                                         (size_t)(key.contextCovariate + 1) * strideCtx +
+                                         (size_t)cyc_idx;
 
                             sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device, sycl::access::address_space::global_space> atom_cached_value(d_recalibrated_score_cache[buffer_idx]);
                             int old = atom_cached_value.load();
                             if (old > 0) {
-                                //auto recalibratedQualityScore = d_recalibrated_quality_scores[buffer_idx];
                                 d_qualities[base_i] = static_cast<uint8_t>(old);
                                 return;
                             }

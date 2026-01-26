@@ -106,7 +106,30 @@ SYCL_EXTERNAL void contextWith(char* bases, SpanField basesPtrs, int32_t context
 SYCL_EXTERNAL CycleCovariatesResult prepareCycleCovariates(uint16_t sequence_len, uint16_t FLAG);
 SYCL_EXTERNAL int32_t computeBaseCycleCovariate( int32_t cycleFactor, int32_t increment, uint32_t index, int32_t maxCycle );
 SYCL_EXTERNAL void computeSnpEvents(char* sequence, SpanField sequencePtrs, int32_t POS, CigarOperation* cigar, size_t cigar_start, uint16_t cigar_len, uint8_t* ref, SpanFieldLong& refPtrs, int8_t* snps);
-SYCL_EXTERNAL double estimateHierarchicalBayesianQuality(double epsilon, combinedBqsrEntry& empiricalReadGroupEntry, bqsrEntry& empiricalBqEntry, bqsrEntry& empiricalContextEntry, bqsrEntry& empiricalCycleEntry);
-SYCL_EXTERNAL int32_t fastRound(double d);
+
+// --- Inlined Functions for GPU visibility ---
+
+SYCL_EXTERNAL inline int32_t fastRound(float d) {
+    return (d > 0.0f) ? static_cast<int>(d + 0.5f) : static_cast<int>(d - 0.5f);
+}
+
+SYCL_EXTERNAL inline float estimateHierarchicalBayesianQuality(float epsilon, combinedBqsrEntry& empiricalReadGroupEntry, bqsrEntry& empiricalBqEntry, bqsrEntry& empiricalContextEntry, bqsrEntry& empiricalCycleEntry) {
+    float deltaGlobalQuality = 0.0f;
+    float deltaReportedQuality = 0.0f;
+
+    deltaGlobalQuality = static_cast<float>(empiricalReadGroupEntry.entry.calculateEmpiricalQuality(epsilon)) - epsilon;
+
+    deltaReportedQuality = static_cast<float>(empiricalBqEntry.calculateEmpiricalQuality(deltaGlobalQuality+epsilon)) - deltaGlobalQuality - epsilon;
+
+    float deltaCovariatesQuality = 0.0f;
+    float conditionalPrior = deltaReportedQuality + deltaGlobalQuality + epsilon;
+
+    deltaCovariatesQuality += static_cast<float>(empiricalCycleEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
+
+    if (empiricalContextEntry.Observations > 0) {
+        deltaCovariatesQuality += static_cast<float>(empiricalContextEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
+    }
+    return conditionalPrior + deltaCovariatesQuality;
+}
 
 #endif //GENOMICPIPELINE_BQSR_H

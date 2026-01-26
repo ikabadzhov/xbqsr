@@ -27,12 +27,7 @@
 
 const uint32_t lowQualityTail = 2;
 
-//const int32_t globalQualityScorePrior = -1;
-
-
-int32_t fastRound(double d) {
-    return (d > 0.0) ? static_cast<int>(d + 0.5) : static_cast<int>(d - 0.5);
-}
+// fastRound and estimateHierarchicalBayesianQuality are now inlined in BQSR.h
 
 SYCL_EXTERNAL int32_t keyFromContext(char* dna, SpanField dnaPtrs, int64_t start, int64_t end) {
     auto key = static_cast<int32_t>(end - start);
@@ -481,8 +476,8 @@ void BaseRecalibrator::mergeTables(BaseRecalibratorTables &recalibration_tables)
                 staging.resize(n);
                 // enqueue memcpy and wait
                 srcMem.context().memcpy(staging.data(),
-                                      srcMem.data(),
-                                      n * sizeof(bqsrEntry)).wait();
+                                       srcMem.data(),
+                                       n * sizeof(bqsrEntry)).wait();
                 srcHostPtr = staging.data();
             }
 
@@ -502,23 +497,4 @@ void BaseRecalibrator::mergeTables(BaseRecalibratorTables &recalibration_tables)
 
     // contexts()
     merge_one_table(recalibration_tables.contexts().table, tables_context);
-}
-
-double estimateHierarchicalBayesianQuality(double epsilon, combinedBqsrEntry& empiricalReadGroupEntry, bqsrEntry& empiricalBqEntry, bqsrEntry& empiricalContextEntry, bqsrEntry& empiricalCycleEntry) {
-    double deltaGlobalQuality = 0.0;
-    double deltaReportedQuality = 0.0;
-
-    deltaGlobalQuality = static_cast<double>(empiricalReadGroupEntry.entry.calculateEmpiricalQuality(epsilon)) - epsilon;
-
-    deltaReportedQuality = static_cast<double>(empiricalBqEntry.calculateEmpiricalQuality(deltaGlobalQuality+epsilon)) - deltaGlobalQuality - epsilon;
-
-    double deltaCovariatesQuality = 0.0;
-    double conditionalPrior = deltaReportedQuality + deltaGlobalQuality + epsilon;
-
-    deltaCovariatesQuality += static_cast<double>(empiricalCycleEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
-
-    if (empiricalContextEntry.Observations > 0) {
-        deltaCovariatesQuality += static_cast<double>(empiricalContextEntry.calculateEmpiricalQuality(conditionalPrior)) - conditionalPrior;
-    }
-    return conditionalPrior + deltaCovariatesQuality;
 }

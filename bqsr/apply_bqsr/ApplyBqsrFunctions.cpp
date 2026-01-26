@@ -121,18 +121,16 @@ const int32_t globalQualityScorePrior = -1;
                         auto readGrpCov = d_reads_group_covariate[idx];
                         auto empiricalReadGroupEntry = d_combined_bqsr_table[readGrpCov];
 
-                        double epsilon;
-                        if (GLOBAL_QUALITY_SCORE_PRIOR > 0.0) {
-                            epsilon = GLOBAL_QUALITY_SCORE_PRIOR;
+                        float epsilon;
+                        if (GLOBAL_QUALITY_SCORE_PRIOR > 0.0f) {
+                            epsilon = static_cast<float>(GLOBAL_QUALITY_SCORE_PRIOR);
                         } else {
                             epsilon = empiricalReadGroupEntry.reportedQuality;
                         }
 
                         applyKey key{};
                         key.readGroupCovariate = readGrpCov;
-
                         int32_t base_i = d_sequences_ptr[idx].start + i;
-
                         uint8_t qual = d_qualities[base_i];
 
                         if (qual >= MIN_INTERESTING_QUAL) {
@@ -185,7 +183,7 @@ const int32_t globalQualityScorePrior = -1;
                             contextKey.ReadGroup = readGrpCov;
                             contextKey.Qual = qual;
 
-                            bqsrEntry empiricalContextEntry(-1,0);
+                            bqsrEntry empiricalContextEntry(-1,0); 
 
                             auto idx3 = static_cast<int32_t>(table_acc.getContextCovIdx(contextKey));
 
@@ -193,7 +191,7 @@ const int32_t globalQualityScorePrior = -1;
                                 empiricalContextEntry = d_context_table[idx3];
                             }
 
-                            double recalibratedQual = estimateHierarchicalBayesianQuality(epsilon, empiricalReadGroupEntry,
+                            float recalibratedQual = estimateHierarchicalBayesianQuality(epsilon, empiricalReadGroupEntry,
                                                                                           empiricalBqEntry,
                                                                                           empiricalContextEntry,
                                                                                           empiricalCycleEntry);
@@ -205,14 +203,6 @@ const int32_t globalQualityScorePrior = -1;
                                 recalibratedQualityScore = d_static_quantized_scores[recalibratedQualityScore];
                             }
 
-
-                            if(key.cycleCovariate < 0) {
-                                buffer_idx = key.readGroupCovariate * table_acc.nQualScore * (table_acc.nContextCov + 1) * table_acc.nCycleCov + key.qual * (table_acc.nContextCov + 1) * table_acc.nCycleCov +
-                                        (key.contextCovariate + 1) * table_acc.nCycleCov + (-1 * key.cycleCovariate + bqsr::defaults::MAX_CYCLE - 1);
-                            } else {
-                                buffer_idx = key.readGroupCovariate * table_acc.nQualScore * (table_acc.nContextCov + 1) * table_acc.nCycleCov + key.qual * (table_acc.nContextCov + 1) * table_acc.nCycleCov +
-                                        (key.contextCovariate + 1) * table_acc.nCycleCov + key.cycleCovariate;
-                            }
                             atom_cached_value.store(recalibratedQualityScore);
                             //lld_recalibrated_quality_scores[buffer_idx] = static_cast<int8_t>(recalibratedQualityScore);
                             d_qualities[base_i] = static_cast<char>(recalibratedQualityScore);

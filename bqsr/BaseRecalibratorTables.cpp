@@ -1,3 +1,4 @@
+#include "BQSR.h"
 #include <sycl/queue.hpp>
 #include "../timer/Timer.h"
 #include "BaseRecalibratorTables.h"
@@ -38,7 +39,8 @@ void BaseRecalibratorTables::initializeDeviceMemory() {
 
     size_t constant_memory = nReadGroups * nQualScore * nCycleCov * (nContextCov+1) * sizeof(int);
     size_t available_mem = q_.get_device().get_info<sycl::info::device::global_mem_size>() - constant_memory - 515 * 1024 * 1024;
-    config.max_memory = available_mem / 3;
+    size_t max_alloc = q_.get_device().get_info<sycl::info::device::max_mem_alloc_size>();
+    config.max_memory = std::min(available_mem / 3, max_alloc - 1024 * 1024); // Cap it with some margin
 
     batch_process = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
     batch_transfer = std::make_shared<Batch<AppyBqsrKernelData, AppyBqsrKernelConfiguration>>(q_transfer_, q_process_, config);
@@ -115,12 +117,12 @@ void BaseRecalibratorTables::initializeCombinedBQSRTable(bqsrTable& bqsrTable, s
             if (table[key.ReadGroup].isValid) {
                 auto& tableEntry = table[key.ReadGroup];
                 auto sumErrors = calculateExpectedErrors(tableEntry.entry.Observations, tableEntry.reportedQuality) +
-                                 calculateExpectedErrors(entry.Observations, double(key.Qual));
+                                 calculateExpectedErrors(entry.Observations, float(key.Qual));
                 tableEntry.entry.Observations += entry.Observations;
                 tableEntry.entry.Mismatches += entry.Mismatches;
-                tableEntry.reportedQuality = -10 * log10(sumErrors / double(tableEntry.entry.Observations));
+                tableEntry.reportedQuality = -10.0f * log10f(sumErrors / float(tableEntry.entry.Observations));
             } else {
-                table[key.ReadGroup] = combinedBqsrEntry{static_cast<double>(key.Qual), entry};
+                table[key.ReadGroup] = combinedBqsrEntry{static_cast<float>(key.Qual), entry};
                 table[key.ReadGroup].isValid = true;
             }
         }
@@ -138,21 +140,21 @@ void BaseRecalibratorTables::FinalizeBQSRTables() {
         if (QualityScores_.table[idx].Observations > 0) {
             auto key = table_acc.idxToQualityScoresKey(idx);
             QualityScores_.empirical_qualities[idx] = QualityScores_.table[idx].calculateEmpiricalQuality(
-                    double(key.Qual));
+                    float(key.Qual));
         }
     }
     for (size_t idx = 0; idx < Contexts_.size(); idx++) {
         if (Contexts_.table[idx].Observations > 0) {
             auto key = table_acc.idxToContextCovKey(idx);
             Contexts_.empirical_qualities[idx] = Contexts_.table[idx].calculateEmpiricalQuality(
-                    double(key.Qual));
+                    float(key.Qual));
         }
     }
     for (size_t idx = 0; idx < Cycles_.size(); idx++) {
         if (Cycles_.table[idx].Observations > 0) {
             auto key = table_acc.idxToCycleCovKey(idx);
             Cycles_.empirical_qualities[idx] = Cycles_.table[idx].calculateEmpiricalQuality(
-                    double(key.Qual));
+                    float(key.Qual));
         }
     }
 }
@@ -267,11 +269,11 @@ bqsrTableKey BaseRecalibratorTables::idxToContextCovKey(size_t idx) {
 }
 */
 
-int32_t errorProbabilityToQuality(double prob) {
-    if (prob == 0.0) {
+int32_t errorProbabilityToQuality(float prob) {
+    if (prob <= 0.0f) {
         return maxQualityScore;
     }
-    return std::max(std::min(int32_t(round(-10*log10(prob))), maxQualityScore), 1);
+    return fastRound(-10.0f * log10f(prob));
 }
 
 struct quantizationInterval  {
@@ -293,8 +295,8 @@ std::vector<quantizationInterval> initializeQuantizationIntervals(std::vector<in
     std::vector<quantizationInterval> intervals(quantizationMap.size());
     for (size_t i=0; i<quantizationMap.size(); i++) {
         auto nobs = quantizationMap[i];
-        auto errorRate = qualityToErrorProbability(double(i));
-        auto nerrors = int32_t(double(nobs) * errorRate);
+        auto errorRate = qualityToErrorProbability(float(i));
+        auto nerrors = int32_t(float(nobs) * errorRate);
         auto j = i + 1;
         if (j == quantizationMap.size()) {
             j = -1;
@@ -308,32 +310,32 @@ std::vector<quantizationInterval> initializeQuantizationIntervals(std::vector<in
     return intervals;
 }
 
-double leafPenalty(int32_t k, std::vector<quantizationInterval>& quantizationIntervals, double globalErrorRate) {
+float leafPenalty(int32_t k, std::vector<quantizationInterval>& quantizationIntervals, float globalErrorRate) {
     auto interval = &quantizationIntervals[k];
     if (k <= MIN_INTERESTING_QUAL) {
-        return 0.0;
+        return 0.0f;
     }
-    return abs(log10(interval->errorRate)-log10(globalErrorRate)) * double(interval->leafNobs);
+    return std::abs(log10f(interval->errorRate)-log10f(globalErrorRate)) * static_cast<float>(interval->leafNobs);
 }
 
-double calculateErrorRate(int64_t nobs, int64_t nerrors) {
+float calculateErrorRate(int64_t nobs, int64_t nerrors) {
     if (nobs == 0) {
-        return 0.0;
+        return 0.0f;
     }
-    return double(nerrors+1) / double(nobs+1);
+    return static_cast<float>(nerrors+1) / static_cast<float>(nobs+1);
 }
 
-double computeMergePenalty(int32_t i, int32_t j, std::vector<quantizationInterval>& quantizationIntervals) {
+float computeMergePenalty(int32_t i, int32_t j, std::vector<quantizationInterval>& quantizationIntervals) {
     auto intervalI = &quantizationIntervals[i];
     auto intervalJ = &quantizationIntervals[j];
 
     int64_t mergedNobs = intervalI->nobs + intervalJ->nobs;
     int64_t mergedNerrors = intervalI->nerrors + intervalJ->nerrors;
-    double mergedErrorRate = calculateErrorRate(mergedNobs, mergedNerrors);
-    if (mergedErrorRate == 0) {
-        return 0.0;
+    float mergedErrorRate = calculateErrorRate(mergedNobs, mergedNerrors);
+    if (mergedErrorRate == 0.0f) {
+        return 0.0f;
     }
-    double sumI = 0, sumJ = 0;
+    float sumI = 0.0f, sumJ = 0.0f;
     for (int32_t k = i; k < j; k++) {
         sumI += leafPenalty(k, quantizationIntervals, mergedErrorRate);
     }
@@ -452,12 +454,12 @@ std::vector<uint8_t> initializeStaticQuantizedScores(std::vector<uint8_t>& quals
 
     auto firstQual = uint8_t(MIN_INTERESTING_QUAL);
     auto prevQual = firstQual;
-    auto prevProb = qualityToProbability(double(prevQual));
+    auto prevProb = qualityToProbability(float(prevQual));
 
     for (auto nextQual :quals) {
         for (auto i = prevQual; i < nextQual; i++) {
-            auto nextProb = qualityToProbability(double(nextQual));
-            auto iProb = qualityToProbability(double(i));
+            auto nextProb = qualityToProbability(float(nextQual));
+            auto iProb = qualityToProbability(float(i));
             if (iProb-prevProb > nextProb-iProb) {
                 staticScores[i] = nextQual;
             } else {
@@ -879,7 +881,7 @@ void BaseRecalibratorTables::LoadFromReport(const std::string& filename, Header&
             std::istringstream iss(s);
             std::string rgStr, eventType;
             int q = 0;
-            double empQ = 0.0;
+            float empQ = 0.0f;
             std::string obsTok, errTok;
 
             if (!(iss >> rgStr >> q >> eventType >> empQ >> obsTok >> errTok)) {
@@ -910,7 +912,7 @@ void BaseRecalibratorTables::LoadFromReport(const std::string& filename, Header&
             std::istringstream iss(s);
             std::string rgStr, covValue, covName, eventType;
             int q = 0;
-            double empQ = 0.0;
+            float empQ = 0.0f;
             std::string obsTok, errTok;
 
             if (!(iss >> rgStr >> q >> covValue >> covName >> eventType >> empQ >> obsTok >> errTok)) {

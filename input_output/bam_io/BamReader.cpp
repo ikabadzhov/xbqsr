@@ -651,19 +651,28 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
                     ready = false;
                 }
 
-                // do IO outside lock
-                if (nextSlice < slices_.size()) {
-                    {
+                for (;;) {
+                    if (nextSlice >= slices_.size())
+                        break;
+
+                    // If this batch is empty, we must be starting a new slice
+                    if (!batch_transfer->buffer.has_data()) {
                         BQS_TRACE_SCOPE("bam_reader:loader_seek_next_slice");
                         SeekVirtual(slices_[nextSlice].start, slices_[nextSlice].end);
+                        slice_id_transfer = slices_[nextSlice].id;
+                        ++nextSlice;
                     }
-                    slice_id_transfer = slices_[nextSlice].id;
-                    nextSlice++;
 
-                    // Optional: show decompression on its own lane just for the load
                     BQS_TRACE_SET_LANE(trace_tl::Role::Decompress, reader_id);
                     { BQS_TRACE_SCOPE("bam_reader:loader_load_batch"); load_batch(batch_transfer, in); }
                     BQS_TRACE_SET_LANE(trace_tl::Role::Loader, reader_id);
+
+                    // If we got data → done for this iteration
+                    if (batch_transfer->buffer.count() > 0) {
+                        break;
+                    }
+
+                    // Else: read==0 → slice finished → loop to seek next slice
                 }
 
                 {

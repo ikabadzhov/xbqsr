@@ -10,7 +10,7 @@
 #include <algorithm>
 
 #ifndef BQS_TRACE_COMPILED
-#define BQS_TRACE_COMPILED 0
+#define BQS_TRACE_COMPILED 1
 #endif
 
 namespace trace_tl {

@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Use oneAPI compilers
-set(CMAKE_C_COMPILER icx)
-set(CMAKE_CXX_COMPILER icpx)
+# Keep the historical oneAPI compiler defaults for local builds, but allow
+# Docker/toolchain builds to override them from the cmake command line.
+if(NOT DEFINED CMAKE_C_COMPILER)
+	set(CMAKE_C_COMPILER icx CACHE STRING "C compiler")
+endif()
+if(NOT DEFINED CMAKE_CXX_COMPILER)
+	set(CMAKE_CXX_COMPILER icpx CACHE STRING "C++ compiler")
+endif()
 
 project(bqsr LANGUAGES C CXX)
 
@@ -14,13 +19,24 @@ set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -fno-omit-frame-pointer -O2")
 
-# --- oneAPI SYCL multi-backend flags ---
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
-    -fsycl \
-    -fsycl-targets=spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa \
-    -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89 \
-    -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a \
-    -Wall")
+option(BQSR_USE_ADAPTIVECPP "Build SYCL kernels through AdaptiveCpp" OFF)
+option(BQSR_USE_ONEAPI_SYCL_FLAGS "Use the original oneAPI multi-backend SYCL flags" ON)
+set(BQSR_CUDA_ARCH "sm_89" CACHE STRING "NVIDIA CUDA architecture for AdaptiveCpp CUDA builds")
+
+if(BQSR_USE_ADAPTIVECPP)
+	if(NOT DEFINED ACPP_TARGETS)
+		set(ACPP_TARGETS "cuda:${BQSR_CUDA_ARCH}" CACHE STRING "AdaptiveCpp compilation targets")
+	endif()
+	find_package(AdaptiveCpp REQUIRED)
+elseif(BQSR_USE_ONEAPI_SYCL_FLAGS)
+	# --- oneAPI SYCL multi-backend flags ---
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
+	    -fsycl \
+	    -fsycl-targets=spir64,nvptx64-nvidia-cuda,amdgcn-amd-amdhsa \
+	    -Xsycl-target-backend=nvptx64-nvidia-cuda --offload-arch=sm_89 \
+	    -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a \
+	    -Wall")
+endif()
 
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
  #   -fsycl \
@@ -189,6 +205,10 @@ add_executable(bqsr
 		pipeline/BoundedPool.h
 )
 
+if(BQSR_USE_ADAPTIVECPP)
+	add_sycl_to_target(TARGET bqsr)
+endif()
+
 # ------------------------------------------------------------------------------
 # Linking
 # ------------------------------------------------------------------------------
@@ -201,5 +221,4 @@ target_link_libraries(bqsr
 		${Boost_LIBRARIES}
 		ZLIB::ZLIB
 		${LIBDEFLATE_LIBRARY}
-		/opt/intel/oneapi/advisor/latest/lib64/libittnotify.a
 )

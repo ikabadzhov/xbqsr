@@ -40,8 +40,35 @@ BQSR operates in two stages:
 ```
 ./bqsr apply --bam-in input.bam \
              --bam-out output.bam \
-             --recal-out recal.txt
+             --recal recal.txt
 ```
+
+### NVIDIA Docker Image
+
+Build the CUDA/AdaptiveCpp image:
+
+```
+docker build -f Dockerfile.cuda -t x-bqsr:cuda-sm89 --build-arg CUDA_ARCH=sm_89 .
+```
+
+Run with NVIDIA GPU passthrough:
+
+```
+docker run --rm --gpus all -v /path/to/data:/data x-bqsr:cuda-sm89 \
+  recalibrate --bam-in /data/input.bam \
+              --recal-out /data/recal.txt \
+              --ref /data/reference.fasta \
+              --known-sites /data/known_variants.vcf
+```
+
+```
+docker run --rm --gpus all -v /path/to/data:/data x-bqsr:cuda-sm89 \
+  apply --bam-in /data/input.bam \
+        --bam-out /data/output.bam \
+        --recal /data/recal.txt
+```
+
+The host must have working NVIDIA drivers and NVIDIA Container Toolkit support.
 
 ### Command-line Arguments
 
@@ -69,4 +96,3 @@ Required options:
 
 Optional options:
 - `--gpus <num|all>` - Number of GPUs to use (default: 1). Use `all` to utilize all available GPUs.
-

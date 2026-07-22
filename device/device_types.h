@@ -4,9 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-#include <sycl/queue.hpp>
 #include <sycl/sycl.hpp>
-#include <sycl/stream.hpp>
+#include <sycl/sycl.hpp>
+#include <sycl/sycl.hpp>
 #include <math.h>
 #include "../sycl_parallel_library/memory/context.h"
 

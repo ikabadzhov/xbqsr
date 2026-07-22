@@ -19,7 +19,7 @@
 #include "input_output/alignment_io/AlignmentWriterFactory.h"
 #include "timer/Timer.h"
 
-#include <sycl/queue.hpp>
+#include <sycl/sycl.hpp>
 #include <sycl/sycl.hpp>
 
 #include "device/batch.h"

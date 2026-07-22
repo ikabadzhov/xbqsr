@@ -132,7 +132,7 @@ struct cta_scan_t<nt, bool> {
 
         //int bits = ballot(x);
         auto sg = item.get_sub_group();
-        int bits = static_cast<int>(sycl::reduce_over_group(sg, x, sycl::ext::oneapi::plus<>()));
+        int bits = static_cast<int>(sycl::reduce_over_group(sg, x, sycl::plus<>()));
 
         storage.warps[warp] = popc(bits);
         item.barrier(sycl::access::fence_space::local_space);

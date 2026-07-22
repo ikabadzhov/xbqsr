@@ -2,7 +2,7 @@
 #define TESTONEAPI_MERGESORT_H
 
 #include <vector>
-#include <sycl/queue.hpp>
+#include <sycl/sycl.hpp>
 #include "../memory/context.h"
 #include "../device_utils/meta.h"
 #include "cta_mergesort.h"

@@ -1,5 +1,5 @@
 #include "BQSR.h"
-#include <sycl/queue.hpp>
+#include <sycl/sycl.hpp>
 #include "../timer/Timer.h"
 #include "BaseRecalibratorTables.h"
 

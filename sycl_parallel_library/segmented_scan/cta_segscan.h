@@ -4,7 +4,7 @@
 #include "../device_utils/operator.h"
 #include "../device_utils/intrinsics.h"
 
-#include <sycl/ext/oneapi/sub_group.hpp>
+#include <sycl/sycl.hpp>
 
 template<typename type_t>
 struct segscan_result_t {
@@ -34,7 +34,7 @@ struct cta_segscan_t {
         // In CUDA would be:
         // int warp_bits = ballot(has_head_flag);
         auto sg = item.get_sub_group();
-        int warp_bits = static_cast<int>(sycl::reduce_over_group(sg, has_head_flag ? (1UL << sg.get_local_linear_id()) : 0, sycl::ext::oneapi::plus<>()));
+        int warp_bits = static_cast<int>(sycl::reduce_over_group(sg, has_head_flag ? (1UL << sg.get_local_linear_id()) : 0, sycl::plus<>()));
 
         storage.delta[warp] = warp_bits;
 
@@ -61,7 +61,7 @@ struct cta_segscan_t {
                  predicate = (0 != storage.delta[tid]);
             }
 
-            size_t cta_bits = sycl::reduce_over_group(sg, predicate ? (1UL << sg.get_local_linear_id()) : 0, sycl::ext::oneapi::plus<>());
+            size_t cta_bits = sycl::reduce_over_group(sg, predicate ? (1UL << sg.get_local_linear_id()) : 0, sycl::plus<>());
 
 
             int warp_segment = 31 - clz(cta_mask & static_cast<int>(cta_bits));

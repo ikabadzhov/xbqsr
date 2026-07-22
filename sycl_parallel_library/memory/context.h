@@ -2,7 +2,10 @@
 #define TESTONEAPI_CONTEXT_H
 
 #include <cstddef>
+// oneDPL is Intel-oneAPI-only and unused here; skip it on toolchains (e.g. AdaptiveCpp) that lack it.
+#if __has_include(<oneapi/dpl/algorithm>)
 #include <oneapi/dpl/algorithm>
+#endif
 
 enum memory_space_t {
     memory_space_device = 0,

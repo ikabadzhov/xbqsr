@@ -1,5 +1,5 @@
 #pragma once
-#include <sycl/device.hpp>
+#include <sycl/sycl.hpp>
 #include <sys/types.h>
 
 #include "BaseRecalibratorTablesAccessor.h"

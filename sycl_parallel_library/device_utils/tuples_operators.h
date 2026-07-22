@@ -50,8 +50,8 @@ namespace syclgal {
     }
 
     template<typename int_t, typename... pointers_t>
-    tuple_iterator_value_t<tuple<pointers_t...> >
-    SYCL_EXTERNAL load(tuple<pointers_t...> pointers, int_t index) {
+    SYCL_EXTERNAL tuple_iterator_value_t<tuple<pointers_t...> >
+    load(tuple<pointers_t...> pointers, int_t index) {
         typedef tuple_iterator_value_t<tuple<pointers_t...> > value_t;
         return value_t(dereference(pointers, index));
     }

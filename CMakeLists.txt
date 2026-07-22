@@ -24,10 +24,18 @@ option(BQSR_USE_ONEAPI_SYCL_FLAGS "Use the original oneAPI multi-backend SYCL fl
 set(BQSR_CUDA_ARCH "sm_89" CACHE STRING "NVIDIA CUDA architecture for AdaptiveCpp CUDA builds")
 
 if(BQSR_USE_ADAPTIVECPP)
+	# Default to the generic (SSCP) flow: it is the only AdaptiveCpp flow that defines SYCL_EXTERNAL
+	# (the legacy cuda/hip multipass flows do not), and it JIT-compiles to whatever GPU is present.
 	if(NOT DEFINED ACPP_TARGETS)
-		set(ACPP_TARGETS "cuda:${BQSR_CUDA_ARCH}" CACHE STRING "AdaptiveCpp compilation targets")
+		set(ACPP_TARGETS "generic" CACHE STRING "AdaptiveCpp compilation targets")
 	endif()
 	find_package(AdaptiveCpp REQUIRED)
+	# The SoA headers use SYCL_EXTERNAL without including <sycl/sycl.hpp> (they relied on icpx -fsycl
+	# predefining it as a keyword). Force-include the umbrella so the macro is defined everywhere.
+	add_compile_options(-include sycl/sycl.hpp)
+	# NOTE (environment-specific, pass on the cmake line if needed):
+	#   * if clang's <format> trips over the system libstdc++, add --gcc-install-dir=<gcc12 dir> to CMAKE_CXX_FLAGS
+	#   * if an orphaned classic TBB in /usr/local shadows oneTBB, add -I<dir with tbb->/usr/include/tbb symlink>
 elseif(BQSR_USE_ONEAPI_SYCL_FLAGS)
 	# --- oneAPI SYCL multi-backend flags ---
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
@@ -213,7 +221,7 @@ endif()
 # Linking
 # ------------------------------------------------------------------------------
 
-target_link_libraries(bqsr
+target_link_libraries(bqsr PRIVATE
 		TBB::tbb
 		pthread
 		dl

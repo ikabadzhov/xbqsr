@@ -602,6 +602,13 @@ static void process_batch(const std::shared_ptr<InputBatchBam>& bp,
 void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::function<SamAlignments()> get_batch,
                                        std::function<void(SamAlignments&&)> on_batch)
 {
+    // A reader may be assigned no slice (more readers than slices, e.g. a small input): its
+    // slices_ is empty, so guard BEFORE indexing slices_[nextSlice] below. (Previously the
+    // equivalent check sat after this access, an out-of-bounds read that icpx tolerated but
+    // clang/AdaptiveCpp faults on.)
+    if (nextSlice >= slices_.size())
+        return;
+
     int32_t reader_id = slices_[nextSlice].id;
     BQS_TRACE_SET_LANE(trace_tl::Role::Reader, (uint32_t)reader_id);
     BQS_TRACE_SCOPE("bam_reader:ParseAlignmentStreamed_total");

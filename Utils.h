@@ -19,6 +19,7 @@ struct Arguments {
     std::vector<int> gpu_devices;   // --gpus (list of device indices, or empty for 'all')
     bool gpu_use_all = false;       // true if --gpus all was specified
     bool verbose = false;           // --verbose or -v (verbosity flag, default: false)
+    bool version = false;           // --version or -V (version flag, default: false)
 
     bool is_recalibrate() const { return command == "recalibrate"; }
     bool is_apply() const { return command == "apply"; }

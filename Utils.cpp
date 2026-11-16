@@ -44,6 +44,7 @@ static std::vector<std::string> split_csv(std::string s) {
 void init_options( po::options_description &description, bool &help ){
 
     description.add_options()( "help,h", po::bool_switch(&help), "Display help" )(
+            "version,V", po::bool_switch(), "Display version" )(
             "command", po::value<string>(), "Command: recalibrate or apply (positional)" )(
             "bam-in", po::value<string>(), "Input BAM file" )(
             "bam-out", po::value<string>(), "Output BAM file (apply command only)" )(
@@ -142,6 +143,12 @@ Arguments parse_arguments(int argc, char** argv) {
     po::store(parsed_result, vm);
     po::notify(vm);
 
+    // Early exit for --version / -V
+    if (vm.count("version") && vm["version"].as<bool>()) {
+        std::cout << "bqsr 1.0.0" << std::endl;
+        exit(0);
+    }
+
     // Parse command first
     string command;
     bool recalibrate = false;
@@ -149,7 +156,10 @@ Arguments parse_arguments(int argc, char** argv) {
 
     if (vm.count("command")) {
         command = vm["command"].as<string>();
-        if (command == "recalibrate") {
+        if (command == "version") {
+            std::cout << "bqsr 1.0.0" << std::endl;
+            exit(0);
+        } else if (command == "recalibrate") {
             recalibrate = true;
         } else if (command == "apply") {
             apply = true;
@@ -164,7 +174,8 @@ Arguments parse_arguments(int argc, char** argv) {
             std::cerr << "Usage:\n";
             std::cerr << "  bqsr recalibrate [options]   Generate recalibration tables\n";
             std::cerr << "  bqsr apply [options]         Apply recalibration to reads\n";
-            std::cerr << "  bqsr -h, --help              Display this help message\n\n";
+            std::cerr << "  bqsr -h, --help              Display this help message\n";
+            std::cerr << "  bqsr -V, --version           Display version\n\n";
             std::cerr << "================================================================================\n\n";
             std::cerr << "RECALIBRATE\n";
             std::cerr << "-----------\n";

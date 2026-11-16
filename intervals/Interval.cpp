@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <charconv>
+#include <zlib.h>
 #include "Interval.h"
 
 
@@ -116,14 +117,46 @@ std::pair<size_t, size_t>  Intersect(Interval* intervals, SpanFieldLong& interva
     return {intervalsPtrs.start + idx_start, intervalsPtrs.start + idx_end};
 }
 
+// Helper to read arbitrary-length line from gzFile (supports plain and gzipped files)
+static bool gz_getline(gzFile gz, std::string& line, std::vector<char>& buf) {
+    line.clear();
+    while (true) {
+        if (!gzgets(gz, buf.data(), static_cast<int>(buf.size()))) {
+            if (!line.empty()) {
+                if (line.back() == '\r') {
+                    line.pop_back();
+                }
+                return true;
+            }
+            return false;
+        }
+        line.append(buf.data());
+        if (!line.empty() && line.back() == '\n') {
+            line.pop_back();
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            return true;
+        }
+    }
+}
+
 // ImportIntervals loads intervals.
 void Interval::ImportIntervals(const std::string& filename, std::unordered_map<std::string, std::vector<Interval>>& intervals) {
-    auto pathname = std::filesystem::absolute(filename.data());
+    auto ends_with = [](const std::string& str, const std::string& suffix) {
+        if (str.size() < suffix.size()) return false;
+        return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(),
+                          [](char a, char b) {
+                              return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+                          });
+    };
 
-    if (pathname.extension()==".bed") {
+    if (ends_with(filename, ".bed") || ends_with(filename, ".bed.gz")) {
         ImportIntervalsFromBed(filename, intervals);
-    } else if (pathname.extension()==".vcf") {
+    } else if (ends_with(filename, ".vcf") || ends_with(filename, ".vcf.gz")) {
         ImportIntervalsFromCsv(filename, intervals);
+    } else {
+        std::cerr << "Warning: Unrecognized interval file format: " << filename << std::endl;
     }
 }
 
@@ -165,97 +198,129 @@ std::vector<Interval> Interval::Flatten(std::vector<Interval>& intervals) {
 }
 
 void Interval::ImportIntervalsFromBed(const std::string& filename, std::unordered_map<std::string, std::vector<Interval>> &intervals) {
-    std::ifstream input(filename);
-
-    if (input.fail()) {
-        std::cout << "Error in reading header of " << filename << " file" << std::endl;
+    gzFile file = gzopen(filename.c_str(), "rb");
+    if (!file) {
+        std::cerr << "Error in reading " << filename << " file" << std::endl;
         exit(-1);
     }
 
+    std::vector<char> buf(65536);
     std::string line;
     std::vector<std::string> fields;
+    fields.resize(3);
 
-    size_t startPos = 0;
-    auto endPos = std::string::npos;
-
-    while(getline(input, line)) {
-        if (line[0]=='#' || line.substr(0,7)=="browser" || line.substr(0,5)=="track") {
+    while (gz_getline(file, line, buf)) {
+        if (line.empty() || line[0] == '#' || line.rfind("browser", 0) == 0 || line.rfind("track", 0) == 0) {
             continue;
-        } else {
-            size_t nFieldsToScan = 3;
-            for (size_t i = 0; i < nFieldsToScan; i++) {
-                if ((endPos = line.find('\t', startPos)) != std::string::npos) {
-                    fields[i] = line.substr(startPos, endPos);
-                    startPos = endPos;
+        }
+
+        size_t startPos = 0;
+        auto endPos = std::string::npos;
+        bool parse_ok = true;
+
+        for (size_t i = 0; i < 3; i++) {
+            if (i < 2) {
+                endPos = line.find('\t', startPos);
+                if (endPos == std::string::npos) {
+                    parse_ok = false;
+                    break;
+                }
+                fields[i] = line.substr(startPos, endPos - startPos);
+                startPos = endPos + 1;
+            } else {
+                endPos = line.find('\t', startPos);
+                if (endPos != std::string::npos) {
+                    fields[i] = line.substr(startPos, endPos - startPos);
                 } else {
-                    std::cerr << "Error in parsing vcf file" << std::endl;
-                    exit(-1);
+                    fields[i] = line.substr(startPos);
                 }
             }
         }
+
+        if (!parse_ok) {
+            std::cerr << "Error in parsing bed line: " << line << std::endl;
+            gzclose(file);
+            exit(-1);
+        }
+
+        uint32_t pos = std::stoul(fields[1]);
+        uint32_t end = std::stoul(fields[2]);
+        intervals[fields[0]].emplace_back(pos, end);
     }
-    uint32_t pos = std::stoul(fields[1]);
-    uint32_t end = std::stoul(fields[2]);
-    intervals[fields[0]].emplace_back(pos, end);
+
+    gzclose(file);
 }
 
 void Interval::ImportIntervalsFromCsv(const std::string& filename, std::unordered_map<std::string, std::vector<Interval>> &intervals) {
-    std::ifstream input(filename);
-
-    if (input.fail()) {
-        std::cout << "Error in reading header of " << filename << " file" << std::endl;
+    gzFile file = gzopen(filename.c_str(), "rb");
+    if (!file) {
+        std::cerr << "Error in reading " << filename << " file" << std::endl;
         exit(-1);
     }
 
+    std::vector<char> buf(65536);
     std::string line;
     std::vector<std::string> fields(4);
-
-    size_t startPos = 0;
-    auto endPos = std::string::npos;
 
     bool found = false;
     size_t fieldCount = 0;
 
-    while(getline(input, line)) {
-        if (line[0]=='#' && line[1]=='#') {
+    while (gz_getline(file, line, buf)) {
+        if (line.empty()) continue;
+        if (line.size() >= 2 && line[0] == '#' && line[1] == '#') {
             continue;
-        } else if (line[0]=='#' && line[1]!='#') {
-            while ((endPos=line.find('\t', startPos))!=std::string::npos) {
-                std::string fieldKey = line.substr(startPos, endPos-startPos);
+        } else if (line[0] == '#') {
+            size_t startPos = 0;
+            auto endPos = std::string::npos;
+            while ((endPos = line.find('\t', startPos)) != std::string::npos) {
+                std::string fieldKey = line.substr(startPos, endPos - startPos);
                 if (fieldKey == "END") {
                     found = true;
                     break;
                 }
                 fieldCount++;
-                startPos = endPos+1;
+                startPos = endPos + 1;
+            }
+            if (!found) {
+                std::string fieldKey = line.substr(startPos);
+                if (fieldKey == "END") {
+                    found = true;
+                }
             }
             continue;
         } else {
-            startPos = 0;
+            size_t startPos = 0;
+            auto endPos = std::string::npos;
             size_t nFieldsToScan = fields.size();
             if (found) {
-                nFieldsToScan = fieldCount;
+                nFieldsToScan = fieldCount + 1;
                 fields.resize(nFieldsToScan);
             }
             for (size_t i = 0; i < nFieldsToScan; i++) {
                 if ((endPos = line.find('\t', startPos)) != std::string::npos) {
-                    fields[i] = line.substr(startPos, endPos-startPos);
-                    startPos = endPos+1;
+                    fields[i] = line.substr(startPos, endPos - startPos);
+                    startPos = endPos + 1;
                 } else {
-                    std::cerr << "Error in parsing vcf file" << std::endl;
-                    exit(-1);
+                    if (i == nFieldsToScan - 1) {
+                        fields[i] = line.substr(startPos);
+                    } else {
+                        std::cerr << "Error in parsing vcf file: " << filename << std::endl;
+                        gzclose(file);
+                        exit(-1);
+                    }
                 }
             }
         }
-        uint32_t pos = std::stol(fields[1]);
-        uint32_t refLen = fields[3].size();
+        uint32_t pos = std::stoul(fields[1]);
+        uint32_t refLen = static_cast<uint32_t>(fields[3].size());
         uint32_t end = 0;
         if (found) {
-            end = std::stol(fields[fieldCount]);
+            end = std::stoul(fields[fieldCount]);
         } else {
             end = pos - 1 + refLen;
         }
         intervals[fields[0]].emplace_back(pos, end);
     }
 
+    gzclose(file);
 }

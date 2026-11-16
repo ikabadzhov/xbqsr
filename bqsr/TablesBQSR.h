@@ -121,7 +121,14 @@ SYCL_EXTERNAL inline float log10QualEmpiricalPrior(float empiricalQual, float re
 }
 
 SYCL_EXTERNAL inline float log10Gamma(int64_t n) {
+#if defined(__ADAPTIVECPP__)
+    // Workaround for AdaptiveCpp builtin_interface.hpp where __acpp_lgamma errantly
+    // dispatches to __acpp_acos, producing NaN for arguments > 1.
+    int sign = 0;
+    return sycl::lgamma_r(static_cast<float>(n), sycl::private_ptr<int>(&sign)) * Log10E;
+#else
     return sycl::lgamma(static_cast<float>(n)) * Log10E;
+#endif
 }
 
 SYCL_EXTERNAL inline float log10BinomialCoefficient(int64_t n, int64_t k) {

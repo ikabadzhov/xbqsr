@@ -37,9 +37,12 @@ static inline VOff make_voff(uint64_t coff, uint32_t uoff) {
 
 class Slice {
 public:
-    VOff start;
-    VOff end;
-    ssize_t id;
+    VOff start{0};
+    VOff end{0};
+    ssize_t id{0};
+
+    Slice() = default;
+    Slice(VOff s, VOff e, ssize_t i) : start(s), end(e), id(i) {}
 };
 
 static inline bool voff_valid(VOff v) {

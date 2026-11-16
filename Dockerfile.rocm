@@ -1,0 +1,83 @@
+FROM rocm/dev-ubuntu-22.04:6.1.2 AS build
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ADAPTIVECPP_REF=v24.02.0
+
+ENV ROCM_PATH=/opt/rocm
+ENV PATH=/opt/adaptivecpp/bin:${ROCM_PATH}/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/adaptivecpp/lib:${ROCM_PATH}/lib:${LD_LIBRARY_PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    clang-15 \
+    cmake \
+    git \
+    libboost-context-dev \
+    libboost-fiber-dev \
+    libboost-program-options-dev \
+    libclang-15-dev \
+    libdeflate-dev \
+    libomp-15-dev \
+    libtbb-dev \
+    llvm-15-dev \
+    ninja-build \
+    python3 \
+    zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN git clone --depth 1 --branch ${ADAPTIVECPP_REF} https://github.com/AdaptiveCpp/AdaptiveCpp.git adaptivecpp \
+ && cmake -S adaptivecpp -B adaptivecpp-build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/adaptivecpp \
+      -DACPP_COMPILER_FEATURE_PROFILE=minimal \
+      -DWITH_CUDA_BACKEND=OFF \
+      -DWITH_ROCM_BACKEND=ON \
+      -DWITH_OPENCL_BACKEND=OFF \
+      -DWITH_LEVEL_ZERO_BACKEND=OFF \
+      -DROCM_PATH=${ROCM_PATH} \
+      -DLLVM_DIR=/usr/lib/llvm-15/lib/cmake/llvm \
+      -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-15 \
+      -DCLANG_INCLUDE_PATH=/usr/lib/llvm-15/lib/clang/15.0.7/include \
+ && cmake --build adaptivecpp-build --target install -j"$(nproc)" \
+ && rm -rf adaptivecpp adaptivecpp-build
+
+WORKDIR /src
+COPY . .
+
+RUN cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang-15 \
+      -DCMAKE_CXX_COMPILER=/opt/adaptivecpp/bin/acpp \
+      -DBQSR_USE_ADAPTIVECPP=ON \
+      -DBQSR_USE_ONEAPI_SYCL_FLAGS=OFF \
+      -DACPP_TARGETS=generic \
+      -DAdaptiveCpp_DIR=/opt/adaptivecpp/lib/cmake/AdaptiveCpp \
+ && cmake --build build -j"$(nproc)"
+
+FROM rocm/dev-ubuntu-22.04:6.1.2 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV PATH=/usr/local/bin:/opt/adaptivecpp/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/adaptivecpp/lib:/opt/rocm/lib:${LD_LIBRARY_PATH}
+ENV ACPP_VISIBILITY_MASK=hip
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libboost-context1.74.0 \
+    libboost-fiber1.74.0 \
+    libboost-program-options1.74.0 \
+    libdeflate0 \
+    libgomp1 \
+    libllvm15 \
+    libtbb12 \
+    zlib1g \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/adaptivecpp /opt/adaptivecpp
+COPY --from=build /src/build/bqsr /usr/local/bin/bqsr
+
+ENTRYPOINT []
+CMD ["/bin/bash"]

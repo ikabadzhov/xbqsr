@@ -346,7 +346,7 @@ static void process_batch_parallel(const std::shared_ptr<InputBatchBam>& bp,
         std::execution::par_unseq,
         fieldsSizes.begin(), fieldsSizes.end(),
         outputOffsets.begin(),
-        VariableLenFieldsVar(0,0,0,0,0),
+        VariableLenFieldsVar{0,0,0,0,0},
         [](const VariableLenFieldsVar& s1, const VariableLenFieldsVar& s2) {
             return VariableLenFieldsVar{
                 s1.qname + s2.qname,

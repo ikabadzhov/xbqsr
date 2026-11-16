@@ -44,10 +44,14 @@ struct covariateBqsrTableKey {
 };
 
 struct BQSRTableConfig {
-    size_t n_read_groups;
-    size_t n_qual_score;
-    size_t max_cycle;
-    size_t context_len;
+    size_t n_read_groups{0};
+    size_t n_qual_score{0};
+    size_t max_cycle{0};
+    size_t context_len{0};
+
+    BQSRTableConfig() = default;
+    BQSRTableConfig(size_t rg, size_t qs, size_t mc, size_t cl)
+        : n_read_groups(rg), n_qual_score(qs), max_cycle(mc), context_len(cl) {}
 };
 
 class BaseRecalibratorTables {

@@ -76,7 +76,7 @@ void aggregate_dense_atomic(
                         sycl::access::address_space::global_space>(d_table[idx].Mismatches);
 
                     mis_ref.fetch_add(static_cast<int64_t>(d_vals[i]));
-                    obs_ref.fetch_add(1);
+                    obs_ref.fetch_add(int64_t{1});
 
                 }
             }
@@ -142,8 +142,8 @@ inline void aggregate_quality_localWG(
 
                 // --- Flush: first BINS threads (or strided) push to global with one atomic each
                 for (int b = lid; b < table_size; b += lsize) {
-                    const int obs = local_obs[b];
-                    const int mis = local_mis[b];
+                    const int64_t obs = local_obs[b];
+                    const int64_t mis = local_mis[b];
                     if (obs == 0 && mis == 0) continue;
 
                     // Atomics on global table entries
@@ -157,8 +157,8 @@ inline void aggregate_quality_localWG(
                         sycl::memory_order::relaxed,
                         sycl::memory_scope::device,
                         sycl::access::address_space::global_space>(d_table[b].Mismatches);
-                        g_obs.fetch_add(obs);
-                        g_mis.fetch_add(mis);
+                    g_obs.fetch_add(obs);
+                    g_mis.fetch_add(mis);
                 }
             }
         );

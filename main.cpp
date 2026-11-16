@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
 
     Arguments args = parse_arguments(argc, argv);
 
-    // Enumerate all GPU devices available
+    // Enumerate GPU accelerator devices
     auto platforms = sycl::platform::get_platforms();
     std::vector<sycl::device> gpus;
 
@@ -66,7 +66,9 @@ int main(int argc, char **argv) {
     }
 
     if (gpus.empty()) {
-        std::cerr << "No GPU devices found!\n";
+        std::cerr << "Error: No GPU accelerator devices found!\n"
+                  << "X-BQSR requires an NVIDIA (CUDA) or AMD (ROCm/HIP) GPU accelerator.\n"
+                  << "For CPU-only execution, run Sarek with '--bqsr_tool gatk'.\n";
         return 1;
     }
 
@@ -149,12 +151,12 @@ int main(int argc, char **argv) {
     Logger::getLogger().log(LOG_INFO, "Building pipeline");
     header->buildReadGroupCovariateIndex();
 
-    BQSRTableConfig bqsrTableConfig(
-        header->getReadGroupCovariates().size(),
+    BQSRTableConfig bqsrTableConfig{
+        static_cast<size_t>(header->getReadGroupCovariates().size()),
         bqsr::defaults::MAX_QUALITY_SCORE,
         bqsr::defaults::MAX_CYCLE,
         bqsr::defaults::CONTEXT_LEN
-    );
+    };
 
     // ---------- Shared input-only objects ----------
     std::unique_ptr<MappedFasta> referenceGenome;

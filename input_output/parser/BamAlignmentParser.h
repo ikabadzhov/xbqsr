@@ -6,11 +6,15 @@
 
 class VariableLenFieldsVar {
 public:
-    size_t qname;
-    size_t cigar;
-    size_t seq;
-    size_t qual;
-    size_t aux;
+    size_t qname{0};
+    size_t cigar{0};
+    size_t seq{0};
+    size_t qual{0};
+    size_t aux{0};
+
+    VariableLenFieldsVar() = default;
+    VariableLenFieldsVar(size_t q, size_t c, size_t s, size_t qu, size_t a)
+        : qname(q), cigar(c), seq(s), qual(qu), aux(a) {}
 };
 
 class BamAlignmentParser {

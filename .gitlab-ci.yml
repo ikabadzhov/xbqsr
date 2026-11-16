@@ -1,0 +1,29 @@
+stages:
+  - build
+  - test
+
+build-bqsr:
+  stage: build
+  before_script:
+    - export PATH="/opt/AdaptiveCpp/bin:$PATH"
+  script:
+    - cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=acpp -DBQSR_USE_ADAPTIVECPP=ON -DACPP_TARGETS=generic
+    - cmake --build build -j$(nproc)
+  artifacts:
+    paths:
+      - build/bqsr
+    expire_in: 1 week
+
+gpu-smoke-test:
+  stage: test
+  dependencies:
+    - build-bqsr
+  before_script:
+    - export PATH="/opt/AdaptiveCpp/bin:$PATH"
+  script:
+    - ./build/bqsr -V
+    - ./build/bqsr --help
+    - ./build/bqsr recalibrate --help
+    - ./build/bqsr apply --help
+    - ACPP_VISIBILITY_MASK=cuda ./build/bqsr recalibrate --help
+    - ACPP_VISIBILITY_MASK=omp ./build/bqsr recalibrate --bam-in dummy.bam --recal-out dummy.table --ref dummy.fasta --known-sites dummy.vcf || [ $? -eq 1 ]

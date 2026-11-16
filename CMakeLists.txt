@@ -1,12 +1,22 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Keep the historical oneAPI compiler defaults for local builds, but allow
-# Docker/toolchain builds to override them from the cmake command line.
-if(NOT DEFINED CMAKE_C_COMPILER)
-	set(CMAKE_C_COMPILER icx CACHE STRING "C compiler")
-endif()
-if(NOT DEFINED CMAKE_CXX_COMPILER)
-	set(CMAKE_CXX_COMPILER icpx CACHE STRING "C++ compiler")
+# Build system configuration
+option(BQSR_USE_ADAPTIVECPP "Build SYCL kernels through AdaptiveCpp" ON)
+option(BQSR_USE_ONEAPI_SYCL_FLAGS "Use the original oneAPI multi-backend SYCL flags" OFF)
+
+# Set compiler defaults based on chosen SYCL toolchain, but allow
+# command-line or environment overrides.
+if(BQSR_USE_ADAPTIVECPP)
+	if(NOT DEFINED CMAKE_CXX_COMPILER)
+		set(CMAKE_CXX_COMPILER acpp CACHE STRING "C++ compiler")
+	endif()
+else()
+	if(NOT DEFINED CMAKE_C_COMPILER)
+		set(CMAKE_C_COMPILER icx CACHE STRING "C compiler")
+	endif()
+	if(NOT DEFINED CMAKE_CXX_COMPILER)
+		set(CMAKE_CXX_COMPILER icpx CACHE STRING "C++ compiler")
+	endif()
 endif()
 
 project(bqsr LANGUAGES C CXX)
@@ -14,20 +24,22 @@ project(bqsr LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Default to Release if no build type is specified
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # Build types
 set(CMAKE_CXX_FLAGS_DEBUG          "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE        "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g -fno-omit-frame-pointer -O2")
 
-option(BQSR_USE_ADAPTIVECPP "Build SYCL kernels through AdaptiveCpp" OFF)
-option(BQSR_USE_ONEAPI_SYCL_FLAGS "Use the original oneAPI multi-backend SYCL flags" ON)
-set(BQSR_CUDA_ARCH "sm_89" CACHE STRING "NVIDIA CUDA architecture for AdaptiveCpp CUDA builds")
-
 if(BQSR_USE_ADAPTIVECPP)
 	# Default to the generic (SSCP) flow: it is the only AdaptiveCpp flow that defines SYCL_EXTERNAL
 	# (the legacy cuda/hip multipass flows do not), and it JIT-compiles to whatever GPU is present.
-	if(NOT DEFINED ACPP_TARGETS)
-		set(ACPP_TARGETS "generic" CACHE STRING "AdaptiveCpp compilation targets")
+	if(NOT DEFINED ACPP_TARGETS OR ACPP_TARGETS STREQUAL "")
+		set(ACPP_TARGETS "generic" CACHE STRING "AdaptiveCpp compilation targets" FORCE)
+		set(ENV{ACPP_TARGETS} "generic")
 	endif()
 	find_package(AdaptiveCpp REQUIRED)
 	# The SoA headers use SYCL_EXTERNAL without including <sycl/sycl.hpp> (they relied on icpx -fsycl

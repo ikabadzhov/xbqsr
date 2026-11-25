@@ -18,8 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-program-options-dev \
     libclang-16-dev \
     libdeflate-dev \
+    libnuma-dev \
     libomp-16-dev \
     libtbb-dev \
+    lld-16 \
+    llvm-16 \
     llvm-16-dev \
     ninja-build \
     python3 \
@@ -74,7 +77,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdeflate0 \
     libgomp1 \
     libllvm16t64 \
+    libnuma1 \
     libtbb12 \
+    lld-16 \
     llvm-16 \
     zlib1g \
  && rm -rf /var/lib/apt/lists/*

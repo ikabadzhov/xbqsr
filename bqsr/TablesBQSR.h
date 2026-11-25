@@ -158,6 +158,9 @@ SYCL_EXTERNAL inline uint8_t calculateBayesianEstimateOfEmpiricalQuality(int64_t
     }
     float max_val = -3.402823466e+38f;
     uint8_t maxI = 0;
+#if defined(__clang__)
+#pragma clang loop unroll(disable)
+#endif
     for (uint8_t i = 0; i <= maxReasonableQualScore; i++) {
         float floati = static_cast<float>(i);
         float p1 = log10QualEmpiricalPrior(floati, priorQuality);

@@ -113,13 +113,25 @@ const int32_t globalQualityScorePrior = -1;
 
                     auto lbs = cta_load_balance_t<nt, vt>().load_balance(count, d_temporary_segments_sequences_offsets, num_reads, tid, cta, mp_data, shared[0].lbs, item);
 
-                    strided_iterate<nt, vt, vt>([&](int k, int j) {
-                        //int output_i = lbs.merge_range.a_begin + j;
+                    // Use a runtime loop instead of template-recursive strided_iterate so LLVM
+                    // emits one copy of the Bayesian recalibration body instead of 2*vt copies.
+                    const int a_count = lbs.merge_range.a_count();
+                    for (int k = 0; k < vt; ++k) {
+                        const int j = nt * k + tid;
+                        if (j >= a_count) break;
+
                         int idx = lbs.segments[k];
                         int i = lbs.ranks[k];
 
+                        if (d_sequences_ptr[idx].len == 0) {
+                            continue;
+                        }
+
                         auto readGrpCov = d_reads_group_covariate[idx];
                         auto empiricalReadGroupEntry = d_combined_bqsr_table[readGrpCov];
+                        if (!empiricalReadGroupEntry.isValid) {
+                            continue;
+                        }
 
                         float epsilon;
                         if (GLOBAL_QUALITY_SCORE_PRIOR > 0.0f) {
@@ -157,11 +169,11 @@ const int32_t globalQualityScorePrior = -1;
                                          (size_t)(key.contextCovariate + 1) * strideCtx +
                                          (size_t)cyc_idx;
 
-                            sycl::atomic_ref<int, sycl::memory_order::acq_rel, sycl::memory_scope::device, sycl::access::address_space::global_space> atom_cached_value(d_recalibrated_score_cache[buffer_idx]);
+                            sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::device, sycl::access::address_space::global_space> atom_cached_value(d_recalibrated_score_cache[buffer_idx]);
                             int old = atom_cached_value.load();
                             if (old > 0) {
                                 d_qualities[base_i] = static_cast<uint8_t>(old);
-                                return;
+                                continue;
                             }
 
                             bqsrTableKey bqKey;
@@ -207,7 +219,7 @@ const int32_t globalQualityScorePrior = -1;
                             //lld_recalibrated_quality_scores[buffer_idx] = static_cast<int8_t>(recalibratedQualityScore);
                             d_qualities[base_i] = static_cast<char>(recalibratedQualityScore);
                         }
-                    }, tid, lbs.merge_range.a_count());
+                    }
             });
         });
     }

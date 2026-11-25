@@ -305,6 +305,7 @@ int main(int argc, char **argv) {
     StreamingEngine engine(cfg, std::move(stages), std::move(finals), alignmentWriter);
 
     engine.run_streaming(alignmentReader, header);
+    if (alignmentWriter) alignmentWriter->Close();
 
     std::cout << "REPORT" << std::endl;
     std::cout <<  "\tTime to initialize pipeline: " + std::to_string(time_to_init_sec) + " sec" << std::endl;

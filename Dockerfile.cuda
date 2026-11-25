@@ -66,6 +66,7 @@ ENV ACPP_VISIBILITY_MASK=cuda
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libatomic1 \
     libboost-context1.74.0 \
     libboost-fiber1.74.0 \
     libboost-program-options1.74.0 \
@@ -73,10 +74,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libllvm15 \
     libtbb12 \
+    llvm-15 \
     zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/adaptivecpp /opt/adaptivecpp
+COPY --from=build /usr/local/cuda/nvvm/libdevice /usr/local/cuda/nvvm/libdevice
 COPY --from=build /src/build/bqsr /usr/local/bin/bqsr
 
 ENTRYPOINT []

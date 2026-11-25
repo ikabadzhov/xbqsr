@@ -32,6 +32,7 @@ jobs:
         run: |
           echo "Building CUDA container..."
           docker build --progress=plain -f Dockerfile.cuda -t ghcr.io/${{ github.repository }}:cuda . 2>&1 | tee build-cuda.log
+          docker run --rm --user 65534:65534 -e HOME=/tmp ghcr.io/${{ github.repository }}:cuda bqsr --version
 
       - name: Tag and Push CUDA container
         run: |
@@ -82,6 +83,7 @@ jobs:
         run: |
           echo "Building ROCm container..."
           docker build --progress=plain -f Dockerfile.rocm -t ghcr.io/${{ github.repository }}:rocm . 2>&1 | tee build-rocm.log
+          docker run --rm --user 65534:65534 -e HOME=/tmp ghcr.io/${{ github.repository }}:rocm bqsr --version
 
       - name: Tag and Push ROCm container
         run: |

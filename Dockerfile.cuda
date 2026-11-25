@@ -66,6 +66,7 @@ ENV ACPP_VISIBILITY_MASK=cuda
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    clang-15 \
     libatomic1 \
     libboost-context1.74.0 \
     libboost-fiber1.74.0 \

@@ -1,11 +1,13 @@
 #include <cassert>
 #include "CompressedInputStream.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include "../../zlib.h"
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <tbb/parallel_for.h>
 
 // ---- GZIP/BGZF header probes ------------------------------------------------
@@ -18,32 +20,35 @@ bool CompressedInputStream::isValidFile(PlainInputStream& stream) {
     return ok;
 }
 
-CompressedInputStream::CompressedInputStream(const std::string &input): path(input), fd_(-1),
+CompressedInputStream::CompressedInputStream(const std::string &input, std::size_t max_pool_bytes): path(input), fd_(-1),
     comp_off_(0),
     decomp_off_(0),
     stash_pos_(0){
     Options opts;
-    stash_cap_ = opts.stash_cap_bytes;
     seen_eof_block_ = false;
     fd_ = ::open(path.c_str(), O_RDONLY);
     if (fd_ < 0) throw std::runtime_error("open() failed for input BGZF");
 
-    // zlib stream: enable gzip wrapper (16 + MAX_WBITS)
-    /*std::memset(&zstrm_, 0, sizeof(zstrm_));
-    if (inflateInit2(&zstrm_, 16 + MAX_WBITS) != Z_OK) {
-        ::close(fd_); fd_ = -1;
-        throw std::runtime_error("zlib inflateInit2 failed");
-    }*/
-
     decomp_ = libdeflate_alloc_decompressor();
     if (!decomp_) {
-        //inflateEnd(&zstrm_);
         ::close(fd_); fd_ = -1;
         throw std::runtime_error("libdeflate_alloc_decompressor failed");
     }
 
-    stash_.reserve(opts.stash_reserve_bytes);
-    comp_pool.resize(opts.stash_cap_bytes / BGZF_BLOCK_SIZE, std::array<uint8_t, BGZF_BLOCK_SIZE>{});
+    std::size_t pool_bytes = (max_pool_bytes > 0) ? max_pool_bytes : opts.stash_cap_bytes;
+    struct stat st{};
+    if (::fstat(fd_, &st) == 0 && st.st_size > 0) {
+        const std::size_t fsize = static_cast<std::size_t>(st.st_size);
+        const std::size_t min_blocks_bytes = 16 * BGZF_BLOCK_SIZE; // 1 MiB floor
+        const std::size_t rounded_file_bytes =
+            ((fsize + BGZF_BLOCK_SIZE - 1) / BGZF_BLOCK_SIZE) * BGZF_BLOCK_SIZE;
+        pool_bytes = std::min(pool_bytes, std::max(min_blocks_bytes, rounded_file_bytes));
+    }
+    pool_bytes = std::max(pool_bytes, 2 * BGZF_BLOCK_SIZE);
+
+    stash_cap_ = pool_bytes;
+    stash_.reserve(std::min(stash_cap_, opts.stash_reserve_bytes));
+    comp_pool.resize(std::max<std::size_t>(1, pool_bytes / BGZF_BLOCK_SIZE));
 }
 
 static inline unsigned U8(char c) { return static_cast<unsigned char>(c); }

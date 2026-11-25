@@ -116,14 +116,29 @@ int main(int argc, char **argv) {
     std::vector<StreamingEngine::FinalizeFn> finals;
 
     // ---------- Build slices / readers ----------
-    const size_t n_producers = 9; //3 * selected_devices.size();
+    const size_t host_avail_bytes = get_available_host_memory_bytes();
+    const size_t target_slice_bytes =
+        (host_avail_bytes >= (64ULL << 30)) ? (512ULL << 20) :
+        (host_avail_bytes >= (32ULL << 30)) ? (256ULL << 20) :
+        (host_avail_bytes >= (12ULL << 30)) ? (64ULL  << 20) :
+                                              (32ULL  << 20);
+
     const std::string bai_path = find_bai_path(args.input_bam);
 
     auto bai = load_bai_linear(bai_path);
+    size_t max_slice_decomp_bytes = 0;
     std::vector<std::pair<VOff,VOff>> ranges =
-        split_ranges_equal_by_compressed_span(args.input_bam, bai.ioffsets, 512UL*1024*1024);
+        split_ranges_equal_by_compressed_span(args.input_bam, bai.ioffsets, target_slice_bytes, &max_slice_decomp_bytes);
 
-    Logger::getLogger().log(LOG_INFO, "Partitioning slices");
+    const size_t hw_threads = std::max<size_t>(1, std::thread::hardware_concurrency());
+    const size_t max_producers_by_ram = std::clamp<size_t>(host_avail_bytes / (2ULL << 30), 2, 9);
+    const size_t max_producers = std::min(max_producers_by_ram, std::max<size_t>(2, hw_threads));
+    const size_t n_producers = std::min(max_producers, std::max<size_t>(1, ranges.size()));
+    const size_t batch_buf_bytes = std::max<size_t>(1ULL << 20, max_slice_decomp_bytes + BGZF_BLOCK_SIZE);
+
+    Logger::getLogger().log(LOG_INFO, "Partitioning slices (" + std::to_string(ranges.size()) +
+                                      " slices, max slice " + std::to_string(max_slice_decomp_bytes >> 20) +
+                                      " MiB, " + std::to_string(host_avail_bytes >> 20) + " MiB host RAM available)");
 
     std::vector<std::vector<Slice>> slices(n_producers);
     for (size_t i = 0; i < ranges.size(); ++i) {
@@ -139,6 +154,7 @@ int main(int argc, char **argv) {
         alignmentReader[i] = AlignmentReaderFactory::open(args.input_bam);
         auto bam = dynamic_cast<BamReader*>(alignmentReader[i].get());
         if (!bam) throw std::runtime_error("AlignmentReader is not a BamReader");
+        bam->SetBatchBufferBytes(batch_buf_bytes);
         bam->SetSlices(std::move(slices[i]));
     });
 

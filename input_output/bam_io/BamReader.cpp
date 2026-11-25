@@ -618,8 +618,11 @@ void BamReader::ParseAlignmentStreamed(std::shared_ptr<Header> header, std::func
         skip_bam_header(in); header_done_ = true;
     }
 
-    auto batch_process  = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
-    auto batch_transfer = std::make_shared<InputBatchBam>(DEFAULT_BUFFER_SIZE);
+    const size_t batch_cap = (batch_buffer_bytes_ > 0)
+        ? batch_buffer_bytes_
+        : static_cast<size_t>(DEFAULT_BUFFER_SIZE);
+    auto batch_process  = std::make_shared<InputBatchBam>(batch_cap);
+    auto batch_transfer = std::make_shared<InputBatchBam>(batch_cap);
 
     Carry carry;
     carry.bin.reserve(4096);

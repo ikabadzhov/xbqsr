@@ -20,10 +20,11 @@ class BamReader : public AlignmentReader {
     uint64_t slice_id_process = 0;
     uint64_t slice_id_transfer = 0;
     std::vector<Slice> slices_;
+    size_t batch_buffer_bytes_ = static_cast<size_t>(DEFAULT_BUFFER_SIZE);
 
 public:
-    explicit BamReader(std::unique_ptr<InputStream> inputStream, ssize_t buffSz = DEFAULT_BUFFER_SIZE) : AlignmentReader(std::move(inputStream)),
-                                                                                                         buffer(std::min(DEFAULT_BUFFER_SIZE, buffSz)) {
+    explicit BamReader(std::unique_ptr<InputStream> inputStream, ssize_t buffSz = 0) : AlignmentReader(std::move(inputStream)),
+                                                                                       buffer(static_cast<size_t>(std::min(DEFAULT_BUFFER_SIZE, std::max<ssize_t>(0, buffSz)))) {
         //in->seekg(static_cast<ssize_t>(BAM_MAGIC.size()));
     }
 
@@ -34,6 +35,7 @@ public:
     void SeekVirtual(VOff voff_start, VOff voff_end) override;
 
     void SetSlices(std::vector<Slice>&& slices);
+    void SetBatchBufferBytes(size_t bytes) { batch_buffer_bytes_ = bytes; }
 };
 
 

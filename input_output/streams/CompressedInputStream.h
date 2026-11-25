@@ -29,10 +29,9 @@ const size_t BGZF_BLOCK_SIZE = 65536;
 class CompressedInputStream : public InputStream {
     struct Options {
         // Max bytes we’re willing to keep in the decompressed stash at once.
-        // (Protects memory use on huge read() requests; can be large if you want.)
-        std::size_t stash_cap_bytes = 1ull << 30; // 1 GiB default
-        // Optional: preallocate stash to this many bytes (avoid first growth cost)
-        std::size_t stash_reserve_bytes = 1ull << 30;
+        std::size_t stash_cap_bytes = 16ULL << 20; // 16 MiB default
+        // Preallocate stash to avoid early reallocations without wasting GBs of RAM.
+        std::size_t stash_reserve_bytes = 4ULL << 20;
     };
 
     gzFile fileDescriptor;
@@ -43,7 +42,7 @@ class CompressedInputStream : public InputStream {
 public:
     static bool isValidFile(PlainInputStream& stream);
 
-    explicit CompressedInputStream(const std::string &input);
+    explicit CompressedInputStream(const std::string &input, std::size_t max_pool_bytes = 0);
 
 
     ~CompressedInputStream() override;

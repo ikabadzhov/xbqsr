@@ -60,20 +60,23 @@ private:
     std::shared_ptr<Header> hdr;
     size_t N_ALNS{};
 
-    size_t capacity;
+    size_t capacity{0};
 
     ssize_t batch_id_ = -1;
     /**
      * Mandatory fields
      **/
 public:
-    explicit SamAlignments(std::shared_ptr<Header> h) : hdr(std::move(h)) {
-        EnsureCapacity(DEFAULT_NUM_ALIGNMENTS);
-        QNAME.ReserveData(MAX_QNAME_LENGTH * DEFAULT_NUM_ALIGNMENTS);
-        QUAL.ReserveData(MAX_QUAL_LENGTH * DEFAULT_NUM_ALIGNMENTS);
-        SEQ.ReserveData(MAX_SEQ_LENGTH * DEFAULT_NUM_ALIGNMENTS);
-        CIGAR.ReserveData(MAX_CIGAR_OPS * DEFAULT_NUM_ALIGNMENTS);
-        TAGS.ReserveData(MAX_TAGS_LENGTH * DEFAULT_NUM_ALIGNMENTS);
+    explicit SamAlignments(std::shared_ptr<Header> h, size_t initial_capacity = DEFAULT_NUM_ALIGNMENTS)
+        : hdr(std::move(h)) {
+        EnsureCapacity(initial_capacity);
+        if (initial_capacity > 0) {
+            QNAME.ReserveData(64 * initial_capacity);
+            QUAL.ReserveData(150 * initial_capacity);
+            SEQ.ReserveData(150 * initial_capacity);
+            CIGAR.ReserveData(8 * initial_capacity);
+            TAGS.ReserveData(64 * initial_capacity);
+        }
     }
 
     StringCollection QNAME;

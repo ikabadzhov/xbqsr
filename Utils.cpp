@@ -1,6 +1,11 @@
 #include "Utils.h"
 
+#include <algorithm>
+#include <cctype>
+#include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <unistd.h>
 
 #include "logger/Logger.h"
 
@@ -368,5 +373,68 @@ Arguments parse_arguments(int argc, char** argv) {
     }
 
     return args;
+}
+
+static bool read_uint64_file(const char* path, uint64_t& out) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    std::string tok;
+    if (!(in >> tok) || tok == "max") return false;
+    try {
+        size_t idx = 0;
+        unsigned long long val = std::stoull(tok, &idx, 10);
+        if (idx != tok.size()) return false;
+        out = static_cast<uint64_t>(val);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+size_t get_available_host_memory_bytes() {
+    uint64_t mem_available = 0;
+    uint64_t mem_total = 0;
+
+    std::ifstream meminfo("/proc/meminfo");
+    if (meminfo.is_open()) {
+        std::string line;
+        while (std::getline(meminfo, line)) {
+            if (line.rfind("MemAvailable:", 0) == 0) {
+                std::istringstream iss(line.substr(13));
+                uint64_t kb = 0;
+                if (iss >> kb) mem_available = kb * 1024ULL;
+            } else if (line.rfind("MemTotal:", 0) == 0) {
+                std::istringstream iss(line.substr(9));
+                uint64_t kb = 0;
+                if (iss >> kb) mem_total = kb * 1024ULL;
+            }
+        }
+    }
+
+    uint64_t avail = (mem_available > 0) ? mem_available : mem_total;
+    if (avail == 0) {
+        const long pages = ::sysconf(_SC_PHYS_PAGES);
+        const long page_sz = ::sysconf(_SC_PAGESIZE);
+        if (pages > 0 && page_sz > 0) {
+            avail = static_cast<uint64_t>(pages) * static_cast<uint64_t>(page_sz);
+        }
+    }
+
+    auto clamp_cgroup = [&](const char* limit_path, const char* usage_path) {
+        uint64_t limit = 0;
+        if (!read_uint64_file(limit_path, limit) || limit >= (1ULL << 60)) return;
+        uint64_t usage = 0;
+        if (read_uint64_file(usage_path, usage) && limit > usage) {
+            avail = (avail > 0) ? std::min(avail, limit - usage) : (limit - usage);
+        } else {
+            avail = (avail > 0) ? std::min(avail, limit) : limit;
+        }
+    };
+
+    clamp_cgroup("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current");
+    clamp_cgroup("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes");
+
+    constexpr uint64_t kFloorBytes = 512ULL << 20;
+    return static_cast<size_t>(std::max(avail, kFloorBytes));
 }
 

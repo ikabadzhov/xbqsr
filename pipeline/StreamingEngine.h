@@ -54,7 +54,7 @@ public:
 
         // Output pool sizing (only if ordered_writer != nullptr)
         size_t out_pool_initial{0};          // 0 => auto
-        size_t out_initial_capacity{DEFAULT_BUFFER_SIZE};
+        size_t out_initial_capacity{0};
     };
 
     struct Stage {

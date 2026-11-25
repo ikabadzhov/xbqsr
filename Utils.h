@@ -51,4 +51,6 @@ std::pair<int64_t, int> Varint(const std::vector<uint8_t>& buf);
 
 void print_stage_header(const std::string& stage_name);
 
+size_t get_available_host_memory_bytes();
+
 #endif //GENOMICPIPELINE_UTILS_H

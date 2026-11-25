@@ -772,7 +772,7 @@ inline uint64_t _overestimated_span_bytes_full_blocks(const _BgzfLightIndex &bg,
 // ------------------------------------------------------------
 inline std::vector<std::pair<VOff, VOff>>
 split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vector<VOff> &ioffsets,
-                                      size_t max_size) {
+                                      size_t max_size, size_t *out_max_slice_decomp_bytes = nullptr) {
   if (max_size <= 0)
     throw std::runtime_error("max_size must be > 0");
   if (ioffsets.size() < 2)
@@ -844,6 +844,17 @@ split_ranges_equal_by_compressed_span(const std::string bam_path, const std::vec
 
   if (ranges.empty())
     throw std::runtime_error("Range split produced no ranges");
+
+  if (out_max_slice_decomp_bytes) {
+    size_t max_bytes = 0;
+    for (const auto &r : ranges) {
+      const size_t span = static_cast<size_t>(
+          _overestimated_span_bytes_full_blocks(bg, r.first, r.second));
+      if (span > max_bytes)
+        max_bytes = span;
+    }
+    *out_max_slice_decomp_bytes = max_bytes;
+  }
 
   Logger::getLogger().log(LOG_DEBUG,"erase empty/degenerate ranges: " + std::to_string(t.elapsed()));
   t.reset();

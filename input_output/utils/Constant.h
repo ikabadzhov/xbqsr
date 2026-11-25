@@ -5,8 +5,8 @@
 #include <cstdint>
 
 
-const ssize_t DEFAULT_BUFFER_SIZE = 1.5 * 1024 * 1024 * 1024;
-static const ssize_t DEFAULT_NUM_ALIGNMENTS = 10*(1UL << 20);
+const ssize_t DEFAULT_BUFFER_SIZE = 64ULL * 1024 * 1024;
+static const ssize_t DEFAULT_NUM_ALIGNMENTS = 4096;
 
 // Practical defaults for short-read workloads
 // Note: they are used as defualt values in reserve method, not actually in resize.

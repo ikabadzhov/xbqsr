@@ -32,7 +32,7 @@ jobs:
         run: |
           echo "Building CUDA container..."
           docker build --progress=plain -f Dockerfile.cuda -t ghcr.io/${{ github.repository }}:cuda . 2>&1 | tee build-cuda.log
-          docker run --rm --user 65534:65534 -e HOME=/tmp ghcr.io/${{ github.repository }}:cuda bash -c "clang++-15 --version && test -f /usr/local/cuda/nvvm/libdevice/libdevice.10.bc && bqsr --version"
+          docker run --rm --user 65534:65534 -e HOME=/tmp ghcr.io/${{ github.repository }}:cuda bash -c "clang++-16 --version && test -f /usr/local/cuda/nvvm/libdevice/libdevice.10.bc && bqsr --version"
 
       - name: Tag and Push CUDA container
         run: |

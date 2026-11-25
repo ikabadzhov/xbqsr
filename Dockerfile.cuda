@@ -1,7 +1,7 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG ADAPTIVECPP_REF=v24.02.0
+ARG ADAPTIVECPP_REF=v25.10.0
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/opt/adaptivecpp/bin:${CUDA_HOME}/bin:${PATH}
@@ -10,17 +10,17 @@ ENV LD_LIBRARY_PATH=/opt/adaptivecpp/lib:${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
-    clang-15 \
+    clang-16 \
     cmake \
     git \
     libboost-context-dev \
     libboost-fiber-dev \
     libboost-program-options-dev \
-    libclang-15-dev \
+    libclang-16-dev \
     libdeflate-dev \
-    libomp-15-dev \
+    libomp-16-dev \
     libtbb-dev \
-    llvm-15-dev \
+    llvm-16-dev \
     ninja-build \
     python3 \
     zlib1g-dev \
@@ -31,15 +31,15 @@ RUN git clone --depth 1 --branch ${ADAPTIVECPP_REF} https://github.com/AdaptiveC
  && cmake -S adaptivecpp -B adaptivecpp-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/adaptivecpp \
-      -DACPP_COMPILER_FEATURE_PROFILE=minimal \
+      -DACPP_COMPILER_FEATURE_PROFILE=full \
       -DWITH_CUDA_BACKEND=ON \
       -DWITH_ROCM_BACKEND=OFF \
       -DWITH_OPENCL_BACKEND=OFF \
       -DWITH_LEVEL_ZERO_BACKEND=OFF \
       -DCUDA_TOOLKIT_ROOT_DIR=${CUDA_HOME} \
-      -DLLVM_DIR=/usr/lib/llvm-15/lib/cmake/llvm \
-      -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-15 \
-      -DCLANG_INCLUDE_PATH=/usr/lib/llvm-15/lib/clang/15.0.7/include \
+      -DLLVM_DIR=/usr/lib/llvm-16/lib/cmake/llvm \
+      -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-16 \
+      -DCLANG_INCLUDE_PATH=/usr/lib/llvm-16/lib/clang/16/include \
  && cmake --build adaptivecpp-build --target install -j"$(nproc)" \
  && rm -rf adaptivecpp adaptivecpp-build
 
@@ -48,7 +48,7 @@ COPY . .
 
 RUN cmake -S . -B build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_C_COMPILER=clang-15 \
+      -DCMAKE_C_COMPILER=clang-16 \
       -DCMAKE_CXX_COMPILER=/opt/adaptivecpp/bin/acpp \
       -DBQSR_USE_ADAPTIVECPP=ON \
       -DBQSR_USE_ONEAPI_SYCL_FLAGS=OFF \
@@ -56,7 +56,7 @@ RUN cmake -S . -B build -G Ninja \
       -DAdaptiveCpp_DIR=/opt/adaptivecpp/lib/cmake/AdaptiveCpp \
  && cmake --build build -j"$(nproc)"
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -66,16 +66,16 @@ ENV ACPP_VISIBILITY_MASK=cuda
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    clang-15 \
+    clang-16 \
     libatomic1 \
-    libboost-context1.74.0 \
-    libboost-fiber1.74.0 \
-    libboost-program-options1.74.0 \
+    libboost-context1.83.0 \
+    libboost-fiber1.83.0 \
+    libboost-program-options1.83.0 \
     libdeflate0 \
     libgomp1 \
-    libllvm15 \
+    libllvm16t64 \
     libtbb12 \
-    llvm-15 \
+    llvm-16 \
     zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
